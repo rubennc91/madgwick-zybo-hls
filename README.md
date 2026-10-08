@@ -33,7 +33,7 @@ Ejecuta desde la raíz del repo (la estructura de carpetas debe mantenerse: los 
 3. **Crear el proyecto Vivado y el block design**
    `cd integration_zybo && vivado -mode batch -source create_project.tcl`
 4. **Bitstream y XSA**
-   `vivado -mode batch -source build_project.tcl` (exporta `system_wrapper.xsa`, que ya incluye el bitstream)
+   `vivado -mode batch -source build_project.tcl` (exporta `madgwick_zybo_z710.xsa`, que ya incluye el bitstream)
 5. **Aplicación**: en Vitis crea una plataforma desde el `.xsa` (rehazla cada vez que cambie), una app standalone vacía y copia `integration_zybo/vitis_app/main.c`. Añade `m` a las librerías del linker si falla `atan2f/sqrtf`.
    UART a 115200 8N1.
 
