@@ -4,6 +4,7 @@
 *_sim/
 ip_repo/
 madgwick_zybo_z710/
+zybo_opt2/
 .Xil/
 logs/
 ws/
