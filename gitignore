@@ -1,0 +1,25 @@
+# Generado por Vivado / Vitis / Vitis HLS (se regenera con los scripts .tcl)
+*_prj/
+*_pkg_prj/
+*_sim/
+ip_repo/
+madgwick_zybo_z710/
+.Xil/
+logs/
+ws/
+*.jou
+*.log
+*.str
+*.xsa
+*.bit
+*.elf
+*.dcp
+*.zip
+.theia/
+.vitis*/
+.lock
+.peers.ini
+compile_commands.json
+# Sistema
+Thumbs.db
+.DS_Store
