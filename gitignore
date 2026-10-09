@@ -11,6 +11,7 @@ logs/
 ws/
 *.jou
 *.log
+!data/*.log
 *.str
 *.xsa
 *.bit

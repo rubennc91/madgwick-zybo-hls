@@ -22,6 +22,9 @@ PS (Zynq) solo por AXI-Lite: configuración, calibración y lectura de q por UAR
 | `HLS_madgwick_stream_opt2/` | **Versión de bajo consumo**: un intérprete de programas en ROM con una sola unidad fadd/fmul/fcmp y rsqrt por Newton-Raphson. `gen_prog.py` genera `madgwick_prog.h` |
 | `integration_zybo/` | Integración con el núcleo **original** (`HLS_madgwick_stream`): `create_project.tcl`, `build_project.tcl`, XDC y `vitis_app/main.c` |
 | `Integration_Zybo_opt2/` | Misma integración con el núcleo **opt2** (proyecto `zybo_opt2`, `AXIS_CFG_PRESET 0x039`) |
+| `analysis/` | `analyze_dual.py` + `replay.py`: reproducen el filtro en doble precisión sobre una captura CSV y calculan el error de cada núcleo (necesita `numpy` y `matplotlib`) |
+| `data/` | Capturas CSV de la UART (texto, ~1 MB cada una) usadas en los resultados |
+| `Integration_Zybo_dual/` | **Los dos núcleos a la vez** (original y opt2) alimentados con la misma trama por un `axis_broadcaster`; `main.c` compara sus cuaterniones y captura un CSV para el análisis offline |
 
 ## Reproducir desde cero
 
@@ -46,6 +49,22 @@ cd ../Integration_Zybo_opt2 && vivado -mode batch -source create_project.tcl
 vivado -mode batch -source build_project.tcl     # exporta zybo_opt2.xsa
 ```
 El testbench y la referencia en C se toman de `HLS_madgwick_stream/`. Si cambias el algoritmo de `madgwick_f2.c`, regenera el programa con `python3 gen_prog.py`.
+
+### Comparación en paralelo (original + opt2, misma entrada)
+```
+cd HLS_madgwick_stream_opt2 && vitis_hls -f run_hls_madgwick_stream_opt2_ip2.tcl   # mismo opt2, empaquetado como IP "mad_opt2"
+cd ../Integration_Zybo_dual && vivado -mode batch -source create_project.tcl
+vivado -mode batch -source build_project.tcl     # exporta zybo_dual.xsa
+```
+Mapa de direcciones: `nav_spi_ctrl` 0x40000000, original 0x40010000, `raw2float` 0x40020000, opt2 0x40030000.
+En la UART: `l` captura 60 s (estado actual), `L` reinicia los dos filtros y captura desde la semilla, `d` repite el volcado. Para los experimentos se recomienda `L` (placa quieta los primeros segundos): empieza en un estado conocido y la reproducción en el PC es exacta; `l` sirve para seguir capturando con el filtro ya convergido. El volcado es un CSV (cabecera `#HDR` con ejes y offsets, una fila por trama con los 9 datos crudos y los dos cuaterniones en hexadecimal de float32). Guarda la salida del terminal en un fichero (Tera Term: File > Log).
+
+### Análisis de una captura
+```
+pip install numpy matplotlib
+python analysis/analyze_dual.py data/captura.log figura.png
+```
+Imprime el error angular (grados) de cada núcleo respecto a la referencia en doble precisión y entre ellos. Detecta si la captura se hizo con `L` o con `l`. Como control, el modelo en float32 del PC reproduce la salida del núcleo original (diferencia <1e-4°).
 
 > En Windows, Vivado limita las rutas a 260 caracteres; por eso el proyecto opt2 se llama `zybo_opt2`. Mantén el repo en una ruta corta.
 5. **Aplicación**: en Vitis crea una plataforma desde el `.xsa` (rehazla cada vez que cambie), una app standalone vacía y copia `integration_zybo/vitis_app/main.c`. Añade `m` a las librerías del linker si falla `atan2f/sqrtf`.
