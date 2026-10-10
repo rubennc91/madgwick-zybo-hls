@@ -1,14 +1,15 @@
-// main.c -- Comprobacion minima en Vitis (standalone, Zybo Z7-10)
+// main.c -- Varias IMUs (hasta 4) servidas por UN solo nucleo Madgwick (Zybo Z7-10)
 //
-// Cadena en la PL:  Pmod NAV (SPI) -> nav_spi_ctrl -> raw2float_top -> axis_broadcaster
-//                   -> { madgwick original (mad_orig) , madgwick opt2 (mad_opt2) }
-// Los dos nucleos reciben exactamente la misma trama. El PS configura registros y lee
-// los dos q_out. Tecla 'l' / 'L': captura 60 s en memoria y la vuelca como CSV por UART.
+// Cadena en la PL:
+//   4 x { Pmod NAV (SPI) -> nav_spi_ctrl_i }  -> r2f_mux (raw2float + round-robin, TID = IMU)
+//   -> mad_multi (un estado q por IMU)  -> q_out[4*i..4*i+3], frame_cnt[i]  (AXI-Lite)
 //
-// Offsets verificados con los xraw2float_top_hw.h / xmadgwick_stream_top_hw.h
-// generados por Vitis HLS, y direcciones base verificadas en el .xsa
-// (system.hwh):  nav_spi_ctrl_0 0x40000000, mad_orig 0x40010000,
-// raw2float_top_0 0x40020000, mad_opt2 0x40030000.
+// Mapa de direcciones (fijado en create_project.tcl):
+//   nav_spi_ctrl_0..3 0x40000000 / 0x40010000 / 0x40020000 / 0x40030000
+//   mad_multi 0x40040000     r2f_mux 0x40050000
+// Offsets del nucleo multi: fijados con "offset=" en madgwick_multi.cpp (ver abajo).
+// Teclas: 0..3 selecciona IMU, g gyro (todas), m mag (la seleccionada), c borrar offsets,
+//         r reset filtros, a/b ejes 0x018/0x039, l/L captura CSV, d volcar de nuevo.
 
 #include <stdio.h>
 #include <string.h>
@@ -45,10 +46,12 @@ static void gt_init(void) {
 }
 
 // ---- Direcciones base (fijas, ver cabecera) -------------------------------
-#define NAV_BASE  0x40000000u
-#define MAD_BASE  0x40010000u
-#define R2F_BASE  0x40020000u
-#define MAD2_BASE 0x40030000u   // nucleo opt2 (mismo mapa de registros que MAD_BASE)
+#define N_IMU     4                     // IMUs conectadas (1..4); las demas no se tocan
+static const u32 NAV_BASES[4] = { 0x40000000u, 0x40010000u, 0x40020000u, 0x40030000u };
+static u32 g_nav = 0x40000000u;         // nav_spi_ctrl de la IMU seleccionada
+#define NAV_BASE  (g_nav)
+#define MAD_BASE  0x40040000u           // mad_multi
+#define R2F_BASE  0x40050000u           // r2f_mux
 
 // ---- nav_spi_ctrl (nav_pkg.vhd) -------------------------------------------
 #define NAV_CTRL        0x00
@@ -87,10 +90,12 @@ static void gt_init(void) {
 
 #define R2F_FS_G_REG  0x10   // [1:0]
 
-#define MAD_Q_OUT     0x10   // 4 palabras: q0..q3 (float)
-#define MAD_BETA      0x20
-#define MAD_DT        0x28
-#define MAD_RESET     0x30
+// mad_multi: offsets fijados con #pragma HLS INTERFACE s_axilite ... offset=
+#define MAD_BETA      0x10
+#define MAD_DT        0x18
+#define MAD_RESET     0x20   // MASCARA: bit i = reiniciar la IMU i
+#define MAD_Q_OUT     0x40   // 16 palabras: IMU i -> q0..q3 en 0x40 + 16*i + 4*k
+#define MAD_FRAME_CNT 0x80   // 4 palabras: tramas procesadas por IMU
 
 // Rango del giroscopio: 0=245dps 1=500dps 2/3=2000dps.
 // Debe ser el MISMO valor en nav_spi_ctrl (RANGE_CFG[1:0]) y en raw2float.
@@ -109,7 +114,7 @@ static void gt_init(void) {
 // ---- Calibracion ------------------------------------------------------------
 #define GYRO_CAL_SAMPLES   256     // ~2,2 s con la placa QUIETA
 #define GYRO_CAL_MAX_RANGE 900     // cuentas (~10 dps): si se mueve mas, repite
-#define MAG_CAL_SECONDS    30      // girar la placa en todas direcciones; 0 = no calibrar
+#define MAG_CAL_SECONDS    0       // girar la placa en todas direcciones; 0 = no calibrar
 #define MAG_CAL_MAX_FRAMES 4200    // tamano del buffer (35 s a 119 Hz)
 #define MAG_CAL_MIN_COVER  1.2     // rango de cada eje >= 1,2 * radio (60 % del diametro)
 #define MAG_CAL_MAX_RESID  0.08    // desviacion del ajuste / radio: mas = descartar
@@ -193,18 +198,32 @@ static int wait_new_sample(u32 *last) {
     return 0;
 }
 
-static const u32 MAD_BASES[2] = { MAD_BASE, MAD2_BASE };   // [0]=original  [1]=opt2
+static void mad_set_beta(float b) { wr(MAD_BASE, MAD_BETA, f2u(b)); }
 
-static void mad_set_beta(float b) {
-    for (int k = 0; k < 2; k++) wr(MAD_BASES[k], MAD_BETA, f2u(b));
-}
-
+#define IMU_MASK ((1u << N_IMU) - 1u)
 static void filter_reset(void) {
     mad_set_beta(BETA_START);
-    for (int k = 0; k < 2; k++) wr(MAD_BASES[k], MAD_RESET, 1);
-    usleep(100000);                 // varias tramas con reset=1
-    for (int k = 0; k < 2; k++) wr(MAD_BASES[k], MAD_RESET, 0);
+    wr(MAD_BASE, MAD_RESET, IMU_MASK);
+    usleep(100000);                 // varias tramas con reset de cada IMU
+    wr(MAD_BASE, MAD_RESET, 0);
 }
+
+// q de la IMU i, leida de forma coherente con frame_cnt (cuenta antes y despues). Devuelve 1 si coherente.
+static int read_q(int i, float q[4], u32 *fc) {
+    u32 c1 = rd(MAD_BASE, MAD_FRAME_CNT + 4 * i);
+    for (int k = 0; k < 4; k++) q[k] = u2f(rd(MAD_BASE, MAD_Q_OUT + 16 * i + 4 * k));
+    u32 c2 = rd(MAD_BASE, MAD_FRAME_CNT + 4 * i);
+    if (fc) *fc = c1;
+    return c1 == c2;
+}
+
+// Offsets de calibracion por IMU (g_goff/g_moff son los de la IMU seleccionada)
+static double g_goff_all[4][3];
+static float  g_moff_all[4][3];
+static int    g_sel = 0;
+static void select_imu(int i) { g_sel = i; g_nav = NAV_BASES[i]; }
+static void save_cal(void) { for (int k = 0; k < 3; k++) { g_goff_all[g_sel][k] = g_goff[k]; g_moff_all[g_sel][k] = g_moff[k]; } }
+static void load_cal(void) { for (int k = 0; k < 3; k++) { g_goff[k] = g_goff_all[g_sel][k]; g_moff[k] = g_moff_all[g_sel][k]; } }
 
 // Mediana-recortada de v[0..n-1] (ordena v). Devuelve la media entre p10 y p90 y el rango p5..p95.
 static double trimmed_mean(int16_t *v, int n, int *spread) {
@@ -528,287 +547,250 @@ static void print_status(u32 st) {
 
 
 // ---------------------------------------------------------------------------
-// Comparacion de los dos nucleos y registro de datos
+// Registro de datos de las N IMUs
 // ---------------------------------------------------------------------------
-// Angulo (grados) de la rotacion relativa entre dos cuaterniones: 2*atan2(|vec|, |r0|)
-// con r = conj(a)*b normalizados. Preciso para angulos muy pequenos (al contrario que acos).
-static float quat_dang_deg(const float a[4], const float b[4]) {
-    float na = sqrtf(a[0]*a[0] + a[1]*a[1] + a[2]*a[2] + a[3]*a[3]);
-    float nb = sqrtf(b[0]*b[0] + b[1]*b[1] + b[2]*b[2] + b[3]*b[3]);
-    if (na < 1e-12f || nb < 1e-12f) return 0.0f;
-    float a0 = a[0]/na, a1 = a[1]/na, a2 = a[2]/na, a3 = a[3]/na;
-    float b0 = b[0]/nb, b1 = b[1]/nb, b2 = b[2]/nb, b3 = b[3]/nb;
-    float r0 = a0*b0 + a1*b1 + a2*b2 + a3*b3;
-    float r1 = a0*b1 - a1*b0 - a2*b3 + a3*b2;
-    float r2 = a0*b2 + a1*b3 - a2*b0 - a3*b1;
-    float r3 = a0*b3 - a1*b2 + a2*b1 - a3*b0;
-    float v = sqrtf(r1*r1 + r2*r2 + r3*r3);
-    return 2.0f * atan2f(v, fabsf(r0)) * 57.29578f;
-}
-
-// Captura en memoria (DDR) de LOG_SECONDS segundos: una fila por trama del sensor.
-// Se vuelca al final como CSV por la UART (a 115200 baud un volcado de 60 s tarda ~1,5 min).
-#define LOG_SECONDS 60
-#define LOG_MAX     8192
+// Una fila por trama de cualquier IMU (cada una muestrea por su cuenta a ~118 Hz).
+// Se vuelca al final como CSV por la UART (~125 s para 4 IMUs y 30 s).
+#define LOG_SECONDS 30
+#define LOG_MAX     (4 * LOG_SECONDS * 120 + 64)
 typedef struct {
-    u32     cnt;        // SAMPLE_COUNT de nav_spi_ctrl
+    u32     cnt;        // SAMPLE_COUNT de nav_spi_ctrl de esa IMU
+    u32     fc;         // frame_cnt del nucleo para esa IMU (tramas ya procesadas)
+    u32     t_us;       // microsegundos desde la primera fila
     int32_t raw[9];     // gx gy gz ax ay az mx my mz (crudos, antes de offset/ejes)
-    u32     qa[4];      // q del nucleo original (bits de float)
-    u32     qb[4];      // q del nucleo opt2     (bits de float)
-    u32     ok;         // 1 si SAMPLE_COUNT no cambio durante la lectura
-    u32     t_us;       // microsegundos desde la primera fila (temporizador global del PS)
+    u32     q[4];       // q de esa IMU (bits de float)
+    u8      imu;
+    u8      ok;         // 1 si ni SAMPLE_COUNT ni frame_cnt cambiaron durante la lectura
 } logrec_t;
 static logrec_t g_log[LOG_MAX];
 static int      g_log_n = 0;
-static u32      g_log_cnt0 = 0;
+static int      g_log_beta_row = -1;       // fila en la que se cambio beta de arranque -> regimen
+static u32      g_log_cnt0[4];
 
 static void log_dump(void) {
-    u32 axis = rd(NAV_BASE, NAV_AXIS_CFG) & 0xFFFu;
-    printf("\r\n#HDR,axis_cfg=0x%03lx,fs_g=%u,dt_hz=119,beta_start=1.0,beta_run=0.1,beta_start_ms=%d,"
-           "goff=%ld/%ld/%ld,moff=%ld/%ld/%ld,cnt0=%lu,n=%d,gt_hz=%lu\r\n",
-           (unsigned long)axis, (unsigned)FS_G_SELECTED, (int)BETA_START_MS,
-           (long)(int32_t)rd(NAV_BASE, NAV_OFF_G + 0), (long)(int32_t)rd(NAV_BASE, NAV_OFF_G + 4),
-           (long)(int32_t)rd(NAV_BASE, NAV_OFF_G + 8),
-           (long)(int32_t)rd(NAV_BASE, NAV_OFF_M + 0), (long)(int32_t)rd(NAV_BASE, NAV_OFF_M + 4),
-           (long)(int32_t)rd(NAV_BASE, NAV_OFF_M + 8),
-           (unsigned long)g_log_cnt0, g_log_n, (unsigned long)g_gt_hz);
-    printf("#COLS,cnt,gx,gy,gz,ax,ay,az,mx,my,mz,qa0,qa1,qa2,qa3,qb0,qb1,qb2,qb3,ok,t_us  "
-           "(qa=original, qb=opt2, hex de float32)\r\n");
+    printf("\r\n#HDR,fs_g=%u,dt_hz=119,beta_start=1.0,beta_run=0.1,beta_start_ms=%d,nimu=%d,n=%d,"
+           "beta_row=%d,gt_hz=%lu\r\n",
+           (unsigned)FS_G_SELECTED, (int)BETA_START_MS, N_IMU, g_log_n, g_log_beta_row, (unsigned long)g_gt_hz);
+    for (int i = 0; i < N_IMU; i++) {
+        const u32 b = NAV_BASES[i];
+        printf("#IMU,%d,axis_cfg=0x%03lx,goff=%ld/%ld/%ld,moff=%ld/%ld/%ld,cnt0=%lu\r\n", i,
+               (unsigned long)(rd(b, NAV_AXIS_CFG) & 0xFFFu),
+               (long)(int32_t)rd(b, NAV_OFF_G + 0), (long)(int32_t)rd(b, NAV_OFF_G + 4), (long)(int32_t)rd(b, NAV_OFF_G + 8),
+               (long)(int32_t)rd(b, NAV_OFF_M + 0), (long)(int32_t)rd(b, NAV_OFF_M + 4), (long)(int32_t)rd(b, NAV_OFF_M + 8),
+               (unsigned long)g_log_cnt0[i]);
+    }
+    printf("#COLS,imu,cnt,fc,t_us,gx,gy,gz,ax,ay,az,mx,my,mz,q0,q1,q2,q3,ok  (q en hex de float32)\r\n");
     for (int i = 0; i < g_log_n; i++) {
         const logrec_t *r = &g_log[i];
-        printf("%lu", (unsigned long)r->cnt);
+        printf("%u,%lu,%lu,%lu", (unsigned)r->imu, (unsigned long)r->cnt, (unsigned long)r->fc, (unsigned long)r->t_us);
         for (int k = 0; k < 9; k++) printf(",%ld", (long)r->raw[k]);
-        for (int k = 0; k < 4; k++) printf(",%08lx", (unsigned long)r->qa[k]);
-        for (int k = 0; k < 4; k++) printf(",%08lx", (unsigned long)r->qb[k]);
-        printf(",%lu,%lu\r\n", (unsigned long)r->ok, (unsigned long)r->t_us);
+        for (int k = 0; k < 4; k++) printf(",%08lx", (unsigned long)r->q[k]);
+        printf(",%u\r\n", (unsigned)r->ok);
     }
     printf("#END\r\n");
 }
 
-// Avisos por terminal durante la captura (a partir del giroscopio):
-//   MOV     = empieza un movimiento           QUIETO = vuelve el reposo
-//   LISTO   = llevas el tiempo de pausa pedido (puedes mover ya)
-#define MOVE_DPS_ON   10.0f     // |w| suavizada por encima: se mueve
-#define MOVE_DPS_OFF   6.0f     // por debajo: quieto (igual que --thr de analyze_poses.py)
-#define HOLD_FIRST_MS 8000      // reposo inicial de referencia
-#define HOLD_POSE_MS  3000      // pausa en cada pose
-
+// Avisos por terminal durante la captura (a partir del giroscopio de la IMU 0):
+//   MOV = empieza un movimiento   QUIETO = vuelve el reposo   LISTO = pausa cumplida, puedes mover
+#define MOVE_DPS_ON   10.0f
+#define MOVE_DPS_OFF   6.0f
+#define HOLD_FIRST_MS 8000
+#define HOLD_POSE_MS  3000
 static void say_t(const char *msg, u32 t_ms) {
     printf("t=%lu.%lu %s\r\n", (unsigned long)(t_ms / 1000u), (unsigned long)((t_ms / 100u) % 10u), msg);
 }
 
-// do_reset=1: reinicia los dos filtros y captura desde la semilla (para reproducir desde cero).
+// do_reset=1: reinicia los filtros y captura desde la semilla.
 static void log_capture(int do_reset, int *beta_low) {
     if (do_reset) { filter_reset(); *beta_low = 0; }
-    printf("Capturando %d s... (avisos: MOV / QUIETO / LISTO; el volcado empieza al terminar)\r\n", LOG_SECONDS);
-    u32 last = rd(NAV_BASE, NAV_SAMPLE_CNT);
-    g_log_cnt0 = last;
+    printf("Capturando %d s de %d IMUs... (avisos: MOV / QUIETO / LISTO segun la IMU 0)\r\n", LOG_SECONDS, N_IMU);
+    u32 last[4];
+    for (int i = 0; i < N_IMU; i++) { last[i] = rd(NAV_BASES[i], NAV_SAMPLE_CNT); g_log_cnt0[i] = last[i]; }
     const float gs = (FS_G_SELECTED == 0 ? 8.75e-3f : (FS_G_SELECTED == 1 ? 17.5e-3f : 70.0e-3f));
     float go[3];
-    for (int k = 0; k < 3; k++) go[k] = (float)(int16_t)rd(NAV_BASE, NAV_OFF_G + 4 * k);
+    for (int k = 0; k < 3; k++) go[k] = (float)(int16_t)rd(NAV_BASES[0], NAV_OFF_G + 4 * k);
     uint64_t t0 = 0;
     float ws = 0.0f; int moving = 0, ready = 0, first = 1; u32 still_since = 0;
-    int n = 0;
-    while (n < LOG_MAX && n < LOG_SECONDS * 120) {
-        if (!wait_new_sample(&last)) { printf("sin tramas: captura cortada\r\n"); break; }
-        usleep(500);                 // los nucleos terminan en <30 us tras la ultima palabra
-        logrec_t *r = &g_log[n];
-        u32 c1 = rd(NAV_BASE, NAV_SAMPLE_CNT);
-        for (int i = 0; i < 9; i++) r->raw[i] = (int32_t)rd(NAV_BASE, NAV_RAW0 + 4 * i);
-        for (int i = 0; i < 4; i++) {
-            r->qa[i] = rd(MAD_BASES[0], MAD_Q_OUT + 4 * i);
-            r->qb[i] = rd(MAD_BASES[1], MAD_Q_OUT + 4 * i);
+    int n = 0; g_log_beta_row = -1;
+    u32 idle = 0;
+    while (n < LOG_MAX) {
+        int got = 0;
+        for (int i = 0; i < N_IMU; i++) {
+            const u32 b = NAV_BASES[i];
+            if (rd(b, NAV_SAMPLE_CNT) == last[i]) continue;
+            usleep(500);                           // da tiempo al mux y al nucleo
+            logrec_t *r = &g_log[n];
+            u32 c1 = rd(b, NAV_SAMPLE_CNT);
+            for (int k = 0; k < 9; k++) r->raw[k] = (int32_t)rd(b, NAV_RAW0 + 4 * k);
+            float qq[4]; u32 fc;
+            int coh = read_q(i, qq, &fc);
+            for (int k = 0; k < 4; k++) r->q[k] = f2u(qq[k]);
+            u32 c2 = rd(b, NAV_SAMPLE_CNT);
+            r->cnt = c1; r->fc = fc; r->imu = (u8)i;
+            r->ok = (c1 == c2 && coh) ? 1u : 0u;
+            last[i] = c1;                          // si llegaron 2 tramas seguidas se vera como hueco en cnt
+            uint64_t tn = gt_now();
+            if (n == 0) t0 = tn;
+            r->t_us = (u32)(((tn - t0) * 1000000ull) / g_gt_hz);
+            u32 t_ms = r->t_us / 1000u;
+            if (i == 0) {                          // avisos: solo con la IMU 0
+                float gx = ((float)r->raw[0] - go[0]) * gs, gy = ((float)r->raw[1] - go[1]) * gs, gz = ((float)r->raw[2] - go[2]) * gs;
+                ws += 0.1f * (sqrtf(gx * gx + gy * gy + gz * gz) - ws);
+                if (!moving && ws > MOVE_DPS_ON) { moving = 1; ready = 0; say_t("MOV", t_ms); }
+                else if (moving && ws < MOVE_DPS_OFF) { moving = 0; still_since = t_ms; say_t("QUIETO", t_ms); }
+                if (!moving && !ready && (t_ms - still_since) >= (first ? HOLD_FIRST_MS : HOLD_POSE_MS)) {
+                    ready = 1; first = 0; say_t("LISTO - mueve", t_ms);
+                }
+            }
+            n++; got = 1; idle = 0;
+            if (!*beta_low && t_ms >= BETA_START_MS) { mad_set_beta(BETA_RUN); *beta_low = 1; g_log_beta_row = n; }
+            if (r->t_us >= (u32)LOG_SECONDS * 1000000u) { g_log_n = n; goto done; }
+            if (n >= LOG_MAX) break;
         }
-        u32 c2 = rd(NAV_BASE, NAV_SAMPLE_CNT);
-        r->cnt = c1;
-        r->ok  = (c1 == c2) ? 1u : 0u;
-        uint64_t tn = gt_now();
-        if (n == 0) t0 = tn;
-        r->t_us = (u32)(((tn - t0) * 1000000ull) / g_gt_hz);
-        // --- avisos (el texto va despues de guardar la fila: no afecta al dato) ---
-        float gx = ((float)r->raw[0] - go[0]) * gs, gy = ((float)r->raw[1] - go[1]) * gs, gz = ((float)r->raw[2] - go[2]) * gs;
-        float w = sqrtf(gx * gx + gy * gy + gz * gz);
-        ws += 0.1f * (w - ws);
-        u32 t_ms = r->t_us / 1000u;
-        if (!moving && ws > MOVE_DPS_ON) {
-            moving = 1; ready = 0;
-            say_t("MOV", t_ms);
-        } else if (moving && ws < MOVE_DPS_OFF) {
-            moving = 0; still_since = t_ms;
-            say_t("QUIETO", t_ms);
+        if (!got) {
+            usleep(100);
+            if (++idle > 3000) { printf("sin tramas: captura cortada\r\n"); break; }   // ~0,3 s sin datos
         }
-        if (!moving && !ready && (t_ms - still_since) >= (first ? HOLD_FIRST_MS : HOLD_POSE_MS)) {
-            ready = 1; first = 0;
-            say_t("LISTO - mueve", t_ms);
-        }
-        n++;
-        if (!*beta_low && (u32)n * 1000u / 119u >= BETA_START_MS) { mad_set_beta(BETA_RUN); *beta_low = 1; }
     }
     g_log_n = n;
-    printf("Captura terminada: %d filas, %lu ms. Volcando CSV...\r\n", n, n ? (unsigned long)(g_log[n - 1].t_us / 1000u) : 0ul);
+done:
+    printf("Captura terminada: %d filas, %lu ms. Volcando CSV...\r\n", g_log_n,
+           g_log_n ? (unsigned long)(g_log[g_log_n - 1].t_us / 1000u) : 0ul);
     log_dump();
 }
 
+static void show_imu(int i) {
+    float q[4]; u32 fc;
+    read_q(i, q, &fc);
+    float n2 = q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3];
+    const float R2D = 57.29578f;
+    float roll  = atan2f(2.0f * (q[0]*q[1] + q[2]*q[3]), 1.0f - 2.0f * (q[1]*q[1] + q[2]*q[2])) * R2D;
+    float sp    = 2.0f * (q[0]*q[2] - q[3]*q[1]);
+    if (sp > 1.0f) sp = 1.0f;
+    if (sp < -1.0f) sp = -1.0f;
+    float pitch = asinf(sp) * R2D;
+    float yaw   = atan2f(2.0f * (q[0]*q[3] + q[1]*q[2]), 1.0f - 2.0f * (q[2]*q[2] + q[3]*q[3])) * R2D;
+    printf("IMU%d%s q=[", i, i == g_sel ? "*" : " ");
+    for (int k = 0; k < 4; k++) { print_f4(q[k]); printf(k < 3 ? " " : ""); }
+    printf("] |q|^2="); print_f4(n2);
+    printf(" r="); print_f1(roll); printf(" p="); print_f1(pitch); printf(" y="); print_f1(yaw);
+    printf(" fc=%lu nav=%lu err=%d\r\n", (unsigned long)fc, (unsigned long)rd(NAV_BASES[i], NAV_SAMPLE_CNT),
+           !!(rd(NAV_BASES[i], NAV_STATUS) & ST_ERROR));
+}
+
+static const int32_t MAG_PRESET[4][3] = { {-2107, 2132, -1331}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
+
 int main(void) {
-    printf("\r\n=== Madgwick en FPGA: comprobacion minima ===\r\n");
+    printf("\r\n=== Madgwick en FPGA: %d IMUs, un solo nucleo ===\r\n", N_IMU);
     gt_init();
 
-
-    // Orden: primero los nucleos HLS (para que esten listos cuando llegue la
-    // primera trama), y al final se habilita nav_spi_ctrl.
-
-    // 1) nav_spi_ctrl: solo se programa el rango (aun sin habilitar)
-    wr(NAV_BASE, NAV_ODR_CFG, (7u << 6) | (3u << 3) | 3u);
-    wr(NAV_BASE, NAV_RANGE_CFG, (0u << 2) | (FS_G_SELECTED & 0x3u));
-    wr(NAV_BASE, NAV_AXIS_CFG, (AXIS_CFG_PRESET >= 0) ? (u32)AXIS_CFG_PRESET : (u32)AXIS_CFG_DEFAULT);
-
-    // 2) raw2float: mismo rango de giroscopio; arranca en modo libre
+    // Orden: primero los bloques HLS (para que esten listos cuando llegue la primera
+    // trama) y al final se habilitan los nav_spi_ctrl.
+    // 1) Cada nav_spi_ctrl: ODR, rango y ejes (aun sin habilitar)
+    for (int i = 0; i < N_IMU; i++) {
+        const u32 b = NAV_BASES[i];
+        wr(b, NAV_ODR_CFG, (7u << 6) | (3u << 3) | 3u);
+        wr(b, NAV_RANGE_CFG, (0u << 2) | (FS_G_SELECTED & 0x3u));
+        wr(b, NAV_AXIS_CFG, (AXIS_CFG_PRESET >= 0) ? (u32)AXIS_CFG_PRESET : (u32)AXIS_CFG_DEFAULT);
+    }
+    // 2) r2f_mux: mismo rango de giroscopio; arranca en modo libre
     wr(R2F_BASE, R2F_FS_G_REG, FS_G_SELECTED & 0x3u);
     wr(R2F_BASE, HLS_AP_CTRL, AP_START | AP_AUTORESTART);
+    // 3) Nucleo multi: beta, dt, reset de todas las IMUs y modo libre
+    wr(MAD_BASE, MAD_BETA, f2u(BETA_START));
+    wr(MAD_BASE, MAD_DT, f2u(DT_SECONDS));
+    wr(MAD_BASE, MAD_RESET, IMU_MASK);
+    wr(MAD_BASE, HLS_AP_CTRL, AP_START | AP_AUTORESTART);
 
-    // 3) Madgwick: beta, dt y UNA ejecucion con reset=1 (reinicia el
-    //    cuaternion; consume una trama pero no integra).
-    //    Los dos nucleos hay que arrancarlos ANTES de habilitar el SPI: el
-    //    axis_broadcaster solo avanza cuando los dos aceptan la trama.
-    for (int k = 0; k < 2; k++) {
-        wr(MAD_BASES[k], MAD_BETA, f2u(BETA_START));
-        wr(MAD_BASES[k], MAD_DT,   f2u(DT_SECONDS));
-        wr(MAD_BASES[k], MAD_RESET, 1);
-        wr(MAD_BASES[k], HLS_AP_CTRL, AP_START);
+    // 4) Habilita los controladores SPI y comprueba cada sensor
+    for (int i = 0; i < N_IMU; i++) wr(NAV_BASES[i], NAV_CTRL, NAV_CTRL_ENABLE);
+    int bad = 0;
+    for (int i = 0; i < N_IMU; i++) {
+        select_imu(i);
+        for (int t = 0; t < 500; t++) {
+            if (rd(NAV_BASE, NAV_STATUS) & (ST_CONFIG_DONE | ST_ERROR)) break;
+            usleep(1000);
+        }
+        u32 st = rd(NAV_BASE, NAV_STATUS);
+        printf("IMU%d: ", i);
+        print_status(st);
+        if (st & ST_ERROR) { printf("  -> ERROR en IMU%d: revisa el cableado de ese Pmod NAV y el XDC\r\n", i); bad = 1; }
     }
+    if (bad) return -1;
 
-    // 4) Habilita el controlador SPI (IRQ no se usa, polling).
-    //    OJO: NO se limpian errores ni se hace SOFT_RESET aqui. El FSM de
-    //    nav_spi_ctrl arranca solo al cargar el bitstream (WHO_AM_I + config)
-    //    y sus bits de error/deteccion quedan latcheados: se leen tal cual.
-    wr(NAV_BASE, NAV_CTRL, NAV_CTRL_ENABLE);
-
-    // Espera a que termine la configuracion del sensor y mira WHO_AM_I
-    for (int i = 0; i < 500; i++) {
-        if (rd(NAV_BASE, NAV_STATUS) & (ST_CONFIG_DONE | ST_ERROR)) break;
+    // 5) Comprueba que el nucleo recibe tramas de cada IMU (frame_cnt > 0)
+    for (int t = 0; t < 1000; t++) {
+        int all = 1;
+        for (int i = 0; i < N_IMU; i++) if (rd(MAD_BASE, MAD_FRAME_CNT + 4 * i) == 0) all = 0;
+        if (all) break;
         usleep(1000);
     }
-    u32 st = rd(NAV_BASE, NAV_STATUS);
-    print_status(st);
-    if (st & ST_ERROR) {
-        printf("ERROR en la adquisicion SPI: revisa el cableado del Pmod NAV "
-               "(pines del XDC) y los bits de error de arriba.\r\n");
-        return -1;
+    for (int i = 0; i < N_IMU; i++) {
+        u32 fc = rd(MAD_BASE, MAD_FRAME_CNT + 4 * i);
+        printf("IMU%d: frame_cnt=%lu%s\r\n", i, (unsigned long)fc, fc ? "" : "   <-- SIN TRAMAS (cable, XDC u offsets de mad_multi)");
+        if (!fc) bad = 1;
     }
+    if (bad) return -2;
+    wr(MAD_BASE, MAD_RESET, 0);
 
-    // Espera ap_done de la ejecucion con reset=1 (llega con la 1a trama)
-    // OJO: ap_done es "clear on read" -> se lee UNA vez por iteracion y se
-    // guarda el resultado (una segunda lectura ya lo veria a 0).
-    int done0 = 0, done1 = 0;
-    for (int i = 0; i < 2000 && !(done0 && done1); i++) {
-        if (!done0) done0 = !!(rd(MAD_BASES[0], HLS_AP_CTRL) & AP_DONE);
-        if (!done1) done1 = !!(rd(MAD_BASES[1], HLS_AP_CTRL) & AP_DONE);
-        if (!(done0 && done1)) usleep(1000);
+    // 6) Calibracion: gyro de cada IMU (placas quietas) y mag (preset o, si MAG_CAL_SECONDS>0, giro de cada una)
+    for (int i = 0; i < N_IMU; i++) {
+        select_imu(i);
+        printf("--- IMU%d ---\r\n", i);
+        calibrate_gyro();
+        save_cal();
     }
-    if (!(done0 && done1)) {
-        printf("TIMEOUT: un nucleo Madgwick no recibe tramas (orig=%d opt2=%d). "
-               "Revisa STATUS/SAMPLE_COUNT de nav_spi_ctrl:\r\n", done0, done1);
-        print_status(rd(NAV_BASE, NAV_STATUS));
-        printf("SAMPLE_COUNT=%lu\r\n", (unsigned long)rd(NAV_BASE, NAV_SAMPLE_CNT));
-        return -2;
+    for (int i = 0; i < N_IMU; i++) {
+        select_imu(i);
+        if (MAG_CAL_SECONDS > 0) {
+            printf("IMU%d: tienes 3 s para coger la placa (pitido = empieza)...\r\n", i);
+            usleep(3000000);
+            calibrate_mag(MAG_CAL_SECONDS);
+        } else {
+            set_off(NAV_OFF_M + 0, MAG_PRESET[i][0]);
+            set_off(NAV_OFF_M + 4, MAG_PRESET[i][1]);
+            set_off(NAV_OFF_M + 8, MAG_PRESET[i][2]);
+            for (int k = 0; k < 3; k++) g_moff[k] = (float)MAG_PRESET[i][k];
+        }
+        save_cal();
     }
-
-    // 5) reset=0 y modo libre (auto_restart): sigue solo, trama tras trama
-    for (int k = 0; k < 2; k++) {
-        wr(MAD_BASES[k], MAD_RESET, 0);
-        wr(MAD_BASES[k], HLS_AP_CTRL, AP_START | AP_AUTORESTART);
-    }
-
-    // 6) Calibracion (offsets restados en la PL, modificables en caliente)
-    calibrate_gyro();
-    if (MAG_CAL_SECONDS > 0) {
-        printf("Preparado: tienes 3 s para coger la placa (pitido = empieza)...\r\n");
-        usleep(3000000);
-        calibrate_mag(MAG_CAL_SECONDS);
-    } else {
-        set_off(NAV_OFF_M + 0, MAG_PRESET_X);
-        set_off(NAV_OFF_M + 4, MAG_PRESET_Y);
-        set_off(NAV_OFF_M + 8, MAG_PRESET_Z);
-        g_moff[0] = MAG_PRESET_X; g_moff[1] = MAG_PRESET_Y; g_moff[2] = MAG_PRESET_Z;
-    }
+    select_imu(0); load_cal();
     filter_reset();
-    u32 t_start_beta = 0;           // en iteraciones de 200 ms
+    u32 t_start_beta = 0;
     int beta_low = 0;
 
-    // 7) Lectura periodica de q_out. Comandos por UART:
-    //    'g' = recalibrar gyro (placa quieta)  'm' = recalibrar mag (girar)
-    //    'c' = poner offsets a 0               'r' = reiniciar filtro
-    printf("Leyendo q_out (orig y opt2) cada 200 ms. Teclas: g=gyro m=mag c=borrar offsets r=reset filtro 1/2=ejes 0x018/0x039  l/L=captura CSV 60 s (L reinicia antes)  d=volcar de nuevo\r\n");
+    printf("Teclas: 0..3 selecciona IMU  g=gyro(todas, quietas)  m=mag(seleccionada)  c=borrar offsets  r=reset  a/b=ejes 0x018/0x039  l/L=captura CSV %d s (L reinicia antes)  d=volcar de nuevo\r\n", LOG_SECONDS);
     for (;;) {
 #ifdef CON_BASE
         while (XUartPs_IsReceiveData(CON_BASE)) {
             char ch = (char)XUartPs_ReadReg(CON_BASE, XUARTPS_FIFO_OFFSET);
-            if (ch == 'g') { calibrate_gyro(); filter_reset(); t_start_beta = 0; beta_low = 0; }
-            else if (ch == 'm') { calibrate_mag(MAG_CAL_SECONDS > 0 ? MAG_CAL_SECONDS : 30); filter_reset(); t_start_beta = 0; beta_low = 0; }
+            if (ch >= '0' && ch < '0' + N_IMU) { select_imu(ch - '0'); load_cal(); printf("IMU seleccionada: %d\r\n", g_sel); }
+            else if (ch == 'g') {
+                for (int i = 0; i < N_IMU; i++) { select_imu(i); calibrate_gyro(); save_cal(); }
+                select_imu(0); load_cal(); filter_reset(); t_start_beta = 0; beta_low = 0;
+            }
+            else if (ch == 'm') { calibrate_mag(MAG_CAL_SECONDS > 0 ? MAG_CAL_SECONDS : 30); save_cal(); filter_reset(); t_start_beta = 0; beta_low = 0; }
             else if (ch == 'c') {
-                for (int k = 0; k < 3; k++) { set_off(NAV_OFF_G + 4*k, 0); set_off(NAV_OFF_M + 4*k, 0); g_moff[k] = 0; g_goff[k] = 0; }
-                printf("offsets a 0\r\n"); filter_reset(); t_start_beta = 0; beta_low = 0;
+                for (int i = 0; i < N_IMU; i++) {
+                    for (int k = 0; k < 3; k++) { wr(NAV_BASES[i], NAV_OFF_G + 4*k, 0); wr(NAV_BASES[i], NAV_OFF_M + 4*k, 0); g_goff_all[i][k] = 0; g_moff_all[i][k] = 0; }
+                }
+                load_cal(); printf("offsets a 0 (todas las IMUs)\r\n"); filter_reset(); t_start_beta = 0; beta_low = 0;
             }
             else if (ch == 'r') { filter_reset(); t_start_beta = 0; beta_low = 0; }
-            // 'l' = captura 60 s con el estado actual; 'L' = reinicia los filtros y captura desde la semilla;
-            // 'd' = vuelve a volcar la ultima captura.
             else if (ch == 'l') { log_capture(0, &beta_low); }
             else if (ch == 'L') { log_capture(1, &beta_low); t_start_beta = 0; }
             else if (ch == 'd') { log_dump(); }
-            // Comparar orientaciones de ejes en caliente (sin recompilar):
-            //   '1' = 0x018 (gyro x,y negados, mag sin cambios)
-            //   '2' = 0x039 (gyro x,y,z negados, mag con X negada)
-            else if (ch == '1' || ch == '2') {
-                u32 cfg = (ch == '1') ? 0x018u : 0x039u;
-                wr(NAV_BASE, NAV_AXIS_CFG, cfg);
-                printf("AXIS_CFG = 0x%03lx\r\n", (unsigned long)cfg);
+            else if (ch == 'a' || ch == 'b') {
+                u32 cfg = (ch == 'a') ? 0x018u : 0x039u;
+                for (int i = 0; i < N_IMU; i++) wr(NAV_BASES[i], NAV_AXIS_CFG, cfg);
+                printf("AXIS_CFG = 0x%03lx (todas)\r\n", (unsigned long)cfg);
                 filter_reset(); t_start_beta = 0; beta_low = 0;
             }
         }
 #endif
-        if (!beta_low && ++t_start_beta * 200u >= BETA_START_MS) {
-            mad_set_beta(BETA_RUN);
-            beta_low = 1;
-        }
-        float q[4], q2[4];
-        for (int i = 0; i < 4; i++) { q[i] = u2f(rd(MAD_BASES[0], MAD_Q_OUT + 4 * i)); q2[i] = u2f(rd(MAD_BASES[1], MAD_Q_OUT + 4 * i)); }
-        float n2 = q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3];
-
-        printf("q = [");
-        for (int i = 0; i < 4; i++) { print_f4(q[i]); printf(i < 3 ? " " : ""); }
-        printf("]  |q|^2=");
-        print_f4(n2);
-        printf("  muestras=%lu  err=%d\r\n",
-               (unsigned long)rd(NAV_BASE, NAV_SAMPLE_CNT),
-               !!(rd(NAV_BASE, NAV_STATUS) & ST_ERROR));
-        printf("q2= [");
-        for (int i = 0; i < 4; i++) { print_f4(q2[i]); printf(i < 3 ? " " : ""); }
-        printf("]  dang(orig,opt2)=");
-        print_f4(quat_dang_deg(q, q2));
-        printf(" deg\r\n");
-        {
-            // Angulos de Euler (grados) a partir de q (convencion de la libreria Madgwick)
-            const float R2D = 57.29578f;
-            float roll  = atan2f(2.0f * (q[0]*q[1] + q[2]*q[3]), 1.0f - 2.0f * (q[1]*q[1] + q[2]*q[2])) * R2D;
-            float sp    = 2.0f * (q[0]*q[2] - q[3]*q[1]);
-            if (sp > 1.0f) sp = 1.0f;
-            if (sp < -1.0f) sp = -1.0f;
-            float pitch = asinf(sp) * R2D;
-            float yaw   = atan2f(2.0f * (q[0]*q[3] + q[1]*q[2]), 1.0f - 2.0f * (q[2]*q[2] + q[3]*q[3])) * R2D;
-            printf("   roll=");  print_f1(roll);
-            printf(" pitch=");   print_f1(pitch);
-            printf(" yaw=");     print_f1(yaw);
-            printf(" deg\r\n");
-        }
-        {
-            int32_t r[9];
-            for (int i = 0; i < 9; i++) r[i] = (int32_t)rd(NAV_BASE, NAV_RAW0 + 4 * i);
-            float cx = r[6] - g_moff[0], cy = r[7] - g_moff[1], cz = r[8] - g_moff[2];
-            printf("   raw g=(%ld,%ld,%ld) a=(%ld,%ld,%ld) m=(%ld,%ld,%ld) |m_comp|=%ld\r\n",
-                   (long)r[0], (long)r[1], (long)r[2], (long)r[3], (long)r[4],
-                   (long)r[5], (long)r[6], (long)r[7], (long)r[8],
-                   (long)sqrtf(cx*cx + cy*cy + cz*cz));
-        }
+        if (!beta_low && ++t_start_beta * 200u >= BETA_START_MS) { mad_set_beta(BETA_RUN); beta_low = 1; }
+        for (int i = 0; i < N_IMU; i++) show_imu(i);
+        printf("\r\n");
         usleep(200000);
     }
     return 0;

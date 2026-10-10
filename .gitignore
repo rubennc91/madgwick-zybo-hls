@@ -6,11 +6,11 @@ ip_repo/
 madgwick_zybo_z710/
 zybo_opt2/
 zybo_dual/
+zybo_multi/
 .Xil/
 logs/
 ws/
 *.jou
-*.log
 *.str
 *.xsa
 *.bit
@@ -22,6 +22,27 @@ ws/
 .lock
 .peers.ini
 compile_commands.json
+
+# Logs de las herramientas. OJO: no se ignora "*.log" a secas, porque las capturas de la UART
+# (data/*.log) tambien terminan en .log y deben subirse.
+vivado*.log
+vitis*.log
+vitis_hls.log
+hs_err_pid*.log
+webtalk*.log
+csim*.log
+csynth*.log
+runme.log
+xsim*.log
+
+# Cache de Python
+__pycache__/
+*.pyc
+
 # Sistema
 Thumbs.db
 .DS_Store
+
+# Las capturas SI se versionan
+!data/
+!data/*.log
