@@ -8,7 +8,7 @@
 //   nav_spi_ctrl_0..3 0x40000000 / 0x40010000 / 0x40020000 / 0x40030000
 //   mad_multi 0x40040000     r2f_mux 0x40050000
 // Offsets del nucleo multi: fijados con "offset=" en madgwick_multi.cpp (ver abajo).
-// Teclas: 0..3 selecciona IMU, g gyro (todas), m mag (la seleccionada), c borrar offsets,
+// Teclas: 0..3 selecciona IMU, g gyro (todas), m mag (la seleccionada), M mag (todas a la vez), c borrar offsets,
 //         r reset filtros, a/b ejes 0x018/0x039, l/L captura CSV, d volcar de nuevo.
 
 #include <stdio.h>
@@ -432,37 +432,9 @@ static int detect_axes(u32 frames, const double c[3]) {
 // Hard-iron: ajuste de esfera por minimos cuadrados |m - c|^2 = R^2 mientras se gira
 // la placa; despues un 2o ajuste sin los valores atipicos (>2 sigma). Luego se deduce
 // la orientacion de ejes (detect_axes). Es mucho mas robusto que (max+min)/2.
-static int calibrate_mag(int seconds) {
-    u32 frames = (u32)seconds * 119u;
-    if (frames > MAG_CAL_MAX_FRAMES) frames = MAG_CAL_MAX_FRAMES;
-    printf("Calibrando magnetometro %lu s: gira la placa despacio por TODAS las orientaciones\r\n",
-           (unsigned long)(frames / 119u));
-    printf("  (cada eje hacia arriba y hacia abajo, y giros en 8). LEJOS de moviles, auriculares, altavoces, portatil.\r\n");
-    set_off(NAV_OFF_M + 0, 0); set_off(NAV_OFF_M + 4, 0); set_off(NAV_OFF_M + 8, 0);
-    g_moff[0] = g_moff[1] = g_moff[2] = 0;
-    usleep(50000);
-    beep(1);
-    led_set(1);                     // LED fijo = gira la placa
-    int32_t mn[3] = { 100000,  100000,  100000};
-    int32_t mx[3] = {-100000, -100000, -100000};
-    u32 last = rd(NAV_BASE, NAV_SAMPLE_CNT);
-    for (u32 n = 0; n < frames; n++) {
-        if (!wait_new_sample(&last)) { led_set(0); printf("  sin tramas: no se calibra\r\n"); return -1; }
-        for (int k = 0; k < 3; k++) {
-            g_cal[n].g[k] = (int16_t)raw_i(k);
-            g_cal[n].a[k] = (int16_t)raw_i(3 + k);
-            int32_t v = raw_i(6 + k);
-            g_cal[n].m[k] = (int16_t)v;
-            if (v < mn[k]) mn[k] = v;
-            if (v > mx[k]) mx[k] = v;
-        }
-        if (n % 119u == 118u) printf("  %lu s restantes\r\n", (unsigned long)((frames - n - 1) / 119u));
-    }
-    led_set(0);
-    beep(3);                        // fin: para de girar
-    printf("  rango mag: x[%ld,%ld] y[%ld,%ld] z[%ld,%ld]\r\n",
-           (long)mn[0], (long)mx[0], (long)mn[1], (long)mx[1], (long)mn[2], (long)mx[2]);
-
+// Ajuste de esfera + comprobaciones + aplicacion del offset, sobre las 'frames' tramas de g_cal.
+// mn/mx = rango crudo de cada eje (ya calculado en la captura). Aplica el offset a la IMU seleccionada.
+static int mag_fit_apply(u32 frames, int32_t mn[3], int32_t mx[3]) {
     static unsigned char use[MAG_CAL_MAX_FRAMES];
     static unsigned char spike[MAG_CAL_MAX_FRAMES];
     double c[3], R = 0, resid = 1;
@@ -530,6 +502,102 @@ static int calibrate_mag(int seconds) {
         }
     }
     return 0;
+}
+
+static int calibrate_mag(int seconds) {
+    u32 frames = (u32)seconds * 119u;
+    if (frames > MAG_CAL_MAX_FRAMES) frames = MAG_CAL_MAX_FRAMES;
+    printf("Calibrando magnetometro %lu s: gira la placa despacio por TODAS las orientaciones\r\n",
+           (unsigned long)(frames / 119u));
+    printf("  (cada eje hacia arriba y hacia abajo, y giros en 8). LEJOS de moviles, auriculares, altavoces, portatil.\r\n");
+    set_off(NAV_OFF_M + 0, 0); set_off(NAV_OFF_M + 4, 0); set_off(NAV_OFF_M + 8, 0);
+    g_moff[0] = g_moff[1] = g_moff[2] = 0;
+    usleep(50000);
+    beep(1);
+    led_set(1);                     // LED fijo = gira la placa
+    int32_t mn[3] = { 100000,  100000,  100000};
+    int32_t mx[3] = {-100000, -100000, -100000};
+    u32 last = rd(NAV_BASE, NAV_SAMPLE_CNT);
+    for (u32 n = 0; n < frames; n++) {
+        if (!wait_new_sample(&last)) { led_set(0); printf("  sin tramas: no se calibra\r\n"); return -1; }
+        for (int k = 0; k < 3; k++) {
+            g_cal[n].g[k] = (int16_t)raw_i(k);
+            g_cal[n].a[k] = (int16_t)raw_i(3 + k);
+            int32_t v = raw_i(6 + k);
+            g_cal[n].m[k] = (int16_t)v;
+            if (v < mn[k]) mn[k] = v;
+            if (v > mx[k]) mx[k] = v;
+        }
+        if (n % 119u == 118u) printf("  %lu s restantes\r\n", (unsigned long)((frames - n - 1) / 119u));
+    }
+    led_set(0);
+    beep(3);                        // fin: para de girar
+    printf("  rango mag: x[%ld,%ld] y[%ld,%ld] z[%ld,%ld]\r\n",
+           (long)mn[0], (long)mx[0], (long)mn[1], (long)mx[1], (long)mn[2], (long)mx[2]);
+
+    return mag_fit_apply(frames, mn, mx);
+}
+
+// Calibracion del magnetometro de TODAS las IMUs a la vez: si estan fijadas a un mismo cuerpo rigido
+// (una placa o caja), basta girar ese cuerpo una vez. Cada IMU guarda sus propias tramas y se ajusta aparte.
+static cal_frame_t g_cal_all[4][MAG_CAL_MAX_FRAMES];
+static int calibrate_mag_all(int seconds) {
+    u32 frames = (u32)seconds * 119u;
+    if (frames > MAG_CAL_MAX_FRAMES) frames = MAG_CAL_MAX_FRAMES;
+    printf("Calibrando el magnetometro de las %d IMUs a la vez, %lu s: gira el CONJUNTO despacio por TODAS las orientaciones\r\n",
+           N_IMU, (unsigned long)(frames / 119u));
+    printf("  (cada eje hacia arriba y hacia abajo, y giros en 8). LEJOS de moviles, auriculares, altavoces, portatil.\r\n");
+    int32_t mn[4][3], mx[4][3];
+    u32 last[4];
+    for (int i = 0; i < N_IMU; i++) {
+        g_nav = NAV_BASES[i];
+        for (int k = 0; k < 3; k++) { set_off(NAV_OFF_M + 4 * k, 0); mn[i][k] = 100000; mx[i][k] = -100000; }
+        last[i] = rd(NAV_BASE, NAV_SAMPLE_CNT);
+    }
+    usleep(50000);
+    beep(1);
+    led_set(1);
+    for (u32 n = 0; n < frames; n++) {
+        for (int i = 0; i < N_IMU; i++) {
+            g_nav = NAV_BASES[i];
+            if (!wait_new_sample(&last[i])) { led_set(0); printf("  IMU%d sin tramas: no se calibra\r\n", i); return -1; }
+            for (int k = 0; k < 3; k++) {
+                g_cal_all[i][n].g[k] = (int16_t)raw_i(k);
+                g_cal_all[i][n].a[k] = (int16_t)raw_i(3 + k);
+                int32_t v = raw_i(6 + k);
+                g_cal_all[i][n].m[k] = (int16_t)v;
+                if (v < mn[i][k]) mn[i][k] = v;
+                if (v > mx[i][k]) mx[i][k] = v;
+            }
+        }
+        if (n % 119u == 118u) printf("  %lu s restantes\r\n", (unsigned long)((frames - n - 1) / 119u));
+    }
+    led_set(0);
+    beep(3);
+    int bad = 0;
+    for (int i = 0; i < N_IMU; i++) {
+        select_imu(i);
+        memcpy(g_cal, g_cal_all[i], frames * sizeof(cal_frame_t));
+        printf("--- IMU%d: rango mag x[%ld,%ld] y[%ld,%ld] z[%ld,%ld]\r\n", i, (long)mn[i][0], (long)mx[i][0],
+               (long)mn[i][1], (long)mx[i][1], (long)mn[i][2], (long)mx[i][2]);
+        if (mag_fit_apply(frames, mn[i], mx[i]) < 0) bad = 1;
+        save_cal();
+    }
+    return bad ? -1 : 0;
+}
+
+// Imprime los offsets vigentes de todas las IMUs en formato C, para copiarlos a GYRO_PRESET / MAG_PRESET.
+static void print_presets(void) {
+    printf("\r\n// Offsets vigentes (copialos a main.c para no recalibrar):\r\n");
+    printf("static const int32_t GYRO_PRESET[4][3] = {");
+    for (int i = 0; i < N_IMU; i++)
+        printf("{%ld, %ld, %ld}%s", (long)(int32_t)rd(NAV_BASES[i], NAV_OFF_G + 0), (long)(int32_t)rd(NAV_BASES[i], NAV_OFF_G + 4),
+               (long)(int32_t)rd(NAV_BASES[i], NAV_OFF_G + 8), i + 1 < N_IMU ? ", " : "");
+    printf("};\r\nstatic const int32_t MAG_PRESET[4][3]  = {");
+    for (int i = 0; i < N_IMU; i++)
+        printf("{%ld, %ld, %ld}%s", (long)(int32_t)rd(NAV_BASES[i], NAV_OFF_M + 0), (long)(int32_t)rd(NAV_BASES[i], NAV_OFF_M + 4),
+               (long)(int32_t)rd(NAV_BASES[i], NAV_OFF_M + 8), i + 1 < N_IMU ? ", " : "");
+    printf("};\r\n\r\n");
 }
 
 static void print_status(u32 st) {
@@ -678,7 +746,16 @@ static void show_imu(int i) {
            !!(rd(NAV_BASES[i], NAV_STATUS) & ST_ERROR));
 }
 
-static const int32_t MAG_PRESET[4][3] = { {-2107, 2132, -1331}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
+// Calibracion al arrancar:
+//  * GYRO_AT_BOOT = 1: mide el sesgo del giroscopio de cada IMU con todo QUIETO (unos 3 s por IMU).
+//    = 0: usa GYRO_PRESET (el sesgo cambia unos 0,3 dps entre arranques; la fusion lo corrige despues,
+//    pero es mejor medirlo; la tecla 'g' lo repite en caliente).
+//  * MAG_CAL_SECONDS > 0: calibra los magnetometros girando el conjunto al arrancar; 0: usa MAG_PRESET
+//    (el hard-iron depende del montaje y del entorno, no del arranque: vale mientras no cambie).
+//    Tecla 'M' = calibrar los 4 a la vez (cuerpo rigido); 'm' = solo la IMU seleccionada.
+#define GYRO_AT_BOOT 1
+static const int32_t GYRO_PRESET[4][3] = { {188, 141, 16}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
+static const int32_t MAG_PRESET[4][3]  = { {-2107, 2132, -1331}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
 
 int main(void) {
     printf("\r\n=== Madgwick en FPGA: %d IMUs, un solo nucleo ===\r\n", N_IMU);
@@ -733,33 +810,41 @@ int main(void) {
     if (bad) return -2;
     wr(MAD_BASE, MAD_RESET, 0);
 
-    // 6) Calibracion: gyro de cada IMU (placas quietas) y mag (preset o, si MAG_CAL_SECONDS>0, giro de cada una)
+    // 6) Calibracion (ver GYRO_AT_BOOT / MAG_CAL_SECONDS): giroscopio de cada IMU y magnetometro
     for (int i = 0; i < N_IMU; i++) {
         select_imu(i);
-        printf("--- IMU%d ---\r\n", i);
-        calibrate_gyro();
-        save_cal();
-    }
-    for (int i = 0; i < N_IMU; i++) {
-        select_imu(i);
-        if (MAG_CAL_SECONDS > 0) {
-            printf("IMU%d: tienes 3 s para coger la placa (pitido = empieza)...\r\n", i);
-            usleep(3000000);
-            calibrate_mag(MAG_CAL_SECONDS);
+        if (GYRO_AT_BOOT) {
+            printf("--- IMU%d: gyro (todo quieto) ---\r\n", i);
+            calibrate_gyro();
         } else {
-            set_off(NAV_OFF_M + 0, MAG_PRESET[i][0]);
-            set_off(NAV_OFF_M + 4, MAG_PRESET[i][1]);
-            set_off(NAV_OFF_M + 8, MAG_PRESET[i][2]);
-            for (int k = 0; k < 3; k++) g_moff[k] = (float)MAG_PRESET[i][k];
+            for (int k = 0; k < 3; k++) { set_off(NAV_OFF_G + 4 * k, GYRO_PRESET[i][k]); g_goff[k] = GYRO_PRESET[i][k]; }
         }
         save_cal();
     }
+    if (MAG_CAL_SECONDS > 0 && N_IMU > 1) {
+        printf("Preparado: tienes 3 s para coger el conjunto (pitido = empieza)...\r\n");
+        usleep(3000000);
+        calibrate_mag_all(MAG_CAL_SECONDS);
+    } else {
+        for (int i = 0; i < N_IMU; i++) {
+            select_imu(i);
+            if (MAG_CAL_SECONDS > 0) {
+                printf("IMU%d: tienes 3 s para coger la placa (pitido = empieza)...\r\n", i);
+                usleep(3000000);
+                calibrate_mag(MAG_CAL_SECONDS);
+            } else {
+                for (int k = 0; k < 3; k++) { set_off(NAV_OFF_M + 4 * k, MAG_PRESET[i][k]); g_moff[k] = (float)MAG_PRESET[i][k]; }
+            }
+            save_cal();
+        }
+    }
+    print_presets();
     select_imu(0); load_cal();
     filter_reset();
     u32 t_start_beta = 0;
     int beta_low = 0;
 
-    printf("Teclas: 0..3 selecciona IMU  g=gyro(todas, quietas)  m=mag(seleccionada)  c=borrar offsets  r=reset  a/b=ejes 0x018/0x039  l/L=captura CSV %d s (L reinicia antes)  d=volcar de nuevo\r\n", LOG_SECONDS);
+    printf("Teclas: 0..3 selecciona IMU  g=gyro(todas, quietas)  m=mag(seleccionada)  M=mag(todas a la vez, cuerpo rigido)  c=borrar offsets  r=reset  a/b=ejes 0x018/0x039  l/L=captura CSV %d s (L reinicia antes)  d=volcar de nuevo\r\n", LOG_SECONDS);
     for (;;) {
 #ifdef CON_BASE
         while (XUartPs_IsReceiveData(CON_BASE)) {
@@ -767,8 +852,9 @@ int main(void) {
             if (ch >= '0' && ch < '0' + N_IMU) { select_imu(ch - '0'); load_cal(); printf("IMU seleccionada: %d\r\n", g_sel); }
             else if (ch == 'g') {
                 for (int i = 0; i < N_IMU; i++) { select_imu(i); calibrate_gyro(); save_cal(); }
-                select_imu(0); load_cal(); filter_reset(); t_start_beta = 0; beta_low = 0;
+                select_imu(0); load_cal(); print_presets(); filter_reset(); t_start_beta = 0; beta_low = 0;
             }
+            else if (ch == 'M') { calibrate_mag_all(MAG_CAL_SECONDS > 0 ? MAG_CAL_SECONDS : 30); select_imu(0); load_cal(); print_presets(); filter_reset(); t_start_beta = 0; beta_low = 0; }
             else if (ch == 'm') { calibrate_mag(MAG_CAL_SECONDS > 0 ? MAG_CAL_SECONDS : 30); save_cal(); filter_reset(); t_start_beta = 0; beta_low = 0; }
             else if (ch == 'c') {
                 for (int i = 0; i < N_IMU; i++) {

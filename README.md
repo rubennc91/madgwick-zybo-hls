@@ -25,7 +25,7 @@ PS (Zynq) solo por AXI-Lite: configuración, calibración y lectura de q por UAR
 | `analysis/` | `replay.py` (modelo del filtro en float32/float64), `analyze_dual.py` (error numérico de cada núcleo), `analyze_poses.py` (prueba de poses con un cubo, incl. escala del giroscopio) y `analyze_multi.py` (varias IMUs). Necesitan `numpy` y `matplotlib` |
 | `data/` | Capturas CSV de la UART (texto, ~1 MB cada una) usadas en los resultados; ver `data/README.md` |
 | `HLS_madgwick_multi/` | **Un solo núcleo para varias IMUs**: `madgwick_multi` (opt2 con un estado `q` por IMU, identificadas por TID) y `r2f_mux` (raw2float + reparto round-robin de 4 entradas). Incluye banco de pruebas en C (`test_pc.sh`) |
-| `Integration_Zybo_multi/` | Integración de **4 Pmod NAV** (JE, JD, JC, JB) con un único núcleo Madgwick (proyecto `zybo_multi`) |
+| `Integration_Zybo_multi/` | Integración de **4 Pmod NAV** (JE, JD, JC, JA) con un único núcleo Madgwick (proyecto `zybo_multi`) |
 | `Integration_Zybo_dual/` | **Los dos núcleos a la vez** (original y opt2) alimentados con la misma trama por un `axis_broadcaster`; `main.c` compara sus cuaterniones y captura un CSV para el análisis offline |
 
 ## Reproducir desde cero
@@ -129,7 +129,8 @@ Pmod NAV 0..3 -> nav_spi_ctrl_0..3 --AXI-Stream--> r2f_mux --(TID = IMU)--> madg
 * `r2f_mux` convierte los enteros crudos a float (mismo escalado que `raw2float_top`) y reparte por turnos las tramas de 4 entradas hacia una única salida con TID.
 * Coste: a 100 MHz una actualización tarda ≤ 2 937 ciclos (29,4 µs), es decir, ≈ 3,5 ms de cada 1000 ms por IMU a 119 Hz; el límite teórico del núcleo es de unas 280 IMUs a 119 Hz (cota teórica; no medida). Cada IMU adicional cuesta un `nav_spi_ctrl` y 5 pines.
 * Mapa de direcciones: `nav_spi_ctrl_i` en 0x40000000 + 0x10000·i; `madgwick_multi` 0x40040000 (`beta` 0x10, `dt` 0x18, `reset` 0x20, `q_out` 0x40, `frame_cnt` 0x80); `r2f_mux` 0x40050000 (`fs_g` 0x10). Los offsets del HLS están fijados con `offset=` en los `#pragma`.
-* Pines: IMU0 en JE, IMU1 en JD, IMU2 en JC, IMU3 en JB (ver `zybo_z7_10_pmod_nav_x4.xdc`; comprueba los pines con la hoja maestra de Digilent antes de conectar).
+* Pines: IMU0 en JE, IMU1 en JD, IMU2 en JC, IMU3 en JA (ver `zybo_z7_10_pmod_nav_x4.xdc`, pines de `Zybo-Z7-Master.xdc` de Digilent). En la Zybo Z7-10, JB es solo de la Z7-20 y JF está en MIO (PS), sin acceso directo desde la PL; JA es el Pmod del XADC y se usa aquí como E/S digital.
+* Calibración: el sesgo del giroscopio se mide al arrancar con todo quieto (`GYRO_AT_BOOT`, o `GYRO_PRESET`); el hard-iron del magnetómetro depende del montaje, no del arranque, y se fija con `MAG_PRESET`. La tecla `M` calibra los 4 magnetómetros a la vez girando el conjunto (cuerpo rígido); tras cada calibración la UART imprime los presets en formato C.
 
 Prueba sin placa: `cd HLS_madgwick_multi && ./test_pc.sh`. Genera 4 IMUs sintéticas con cadencias distintas, las pasa por el mux y compara la salida de `madgwick_multi` con 4 núcleos de una sola IMU: 9 600 valores, 0 diferencias (bit a bit).
 
@@ -140,7 +141,7 @@ cd ../Integration_Zybo_multi && vivado -mode batch -source create_project.tcl
 vivado -mode batch -source build_project.tcl     # exporta zybo_multi.xsa
 python analysis/analyze_multi.py data/captura_multi.log --rigid --png fig_multi.png
 ```
-Teclas del `main.c` multi: `0..3` selecciona IMU, `g` gyro (todas), `m` mag (la seleccionada), `c` borrar offsets, `r` reset, `a`/`b` ejes 0x018/0x039, `l`/`L` captura (30 s, todas las IMUs), `d` volcar de nuevo.
+Teclas del `main.c` multi: `0..3` selecciona IMU, `g` gyro (todas), `m` mag (la seleccionada), `M` mag (todas a la vez), `c` borrar offsets, `r` reset, `a`/`b` ejes 0x018/0x039, `l`/`L` captura (30 s, todas las IMUs), `d` volcar de nuevo.
 
 > Estado: simulado en C (bit a bit) y con análisis offline probado con datos sintéticos; **pendiente de probar en placa**.
 

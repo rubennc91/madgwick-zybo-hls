@@ -1,6 +1,7 @@
 # Pmod NAV x4 en la Zybo Z7-10. Cada Pmod usa los pines 1 (CS_AG), 2 (MOSI), 3 (MISO), 4 (SCLK) y 9 (CS_M)
-# de su conector. IMU0 = JE (igual que en los otros proyectos), IMU1 = JD, IMU2 = JC, IMU3 = JB.
-# JA se deja libre (XADC). Pines de la hoja Zybo-Z7-Master.xdc de Digilent: VERIFICALOS antes de conectar.
+# de su conector. IMU0 = JE (igual que en los otros proyectos), IMU1 = JD, IMU2 = JC, IMU3 = JA (XADC; se usa como E/S digital).
+# JB es solo de la Zybo Z7-20 (el banco 13 no existe en la Z7-10) y JF es de MIO (PS): no llegan a la PL.
+# Pines de Zybo-Z7-Master.xdc (Digilent).
 # Los Pmod NAV se alimentan a 3,3 V del propio conector (LVCMOS33).
 
 # ---- IMU0: Pmod JE ----
@@ -39,16 +40,16 @@ set_property IOSTANDARD LVCMOS33 [get_ports {spi_sclk_2}]
 set_property PACKAGE_PIN T12  [get_ports {spi_cs_n_2[1]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {spi_cs_n_2[1]}]
 
-# ---- IMU3: Pmod JB ----
-set_property PACKAGE_PIN V8   [get_ports {spi_cs_n_3[0]}]
+# ---- IMU3: Pmod JA (XADC) ----
+set_property PACKAGE_PIN N15  [get_ports {spi_cs_n_3[0]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {spi_cs_n_3[0]}]
-set_property PACKAGE_PIN W8   [get_ports {spi_mosi_3}]
+set_property PACKAGE_PIN L14  [get_ports {spi_mosi_3}]
 set_property IOSTANDARD LVCMOS33 [get_ports {spi_mosi_3}]
-set_property PACKAGE_PIN U7   [get_ports {spi_miso_3}]
+set_property PACKAGE_PIN K16  [get_ports {spi_miso_3}]
 set_property IOSTANDARD LVCMOS33 [get_ports {spi_miso_3}]
-set_property PACKAGE_PIN V7   [get_ports {spi_sclk_3}]
+set_property PACKAGE_PIN K14  [get_ports {spi_sclk_3}]
 set_property IOSTANDARD LVCMOS33 [get_ports {spi_sclk_3}]
-set_property PACKAGE_PIN V6   [get_ports {spi_cs_n_3[1]}]
+set_property PACKAGE_PIN J16  [get_ports {spi_cs_n_3[1]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {spi_cs_n_3[1]}]
 
 set_property BITSTREAM.CONFIG.UNUSEDPIN PULLUP [current_design]
