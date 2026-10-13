@@ -1,0 +1,52 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2023 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2023.2.1 (win64) Build 4081461 Thu Dec 14 12:24:51 MST 2023
+| Date         : Tue Oct 13 13:25:25 2026
+| Host         : MP_T590_TPRNC running 64-bit major release  (build 9200)
+| Command      : report_utilization -hierarchical -hierarchical_depth 3 -file reports/util_hier_multi.rpt
+| Design       : system_wrapper
+| Device       : xc7z010clg400-1
+| Speed File   : -1
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++----------------------+---------------------------------------------------------+------------+------------+---------+------+------+--------+--------+------------+
+|       Instance       |                          Module                         | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs | RAMB36 | RAMB18 | DSP Blocks |
++----------------------+---------------------------------------------------------+------------+------------+---------+------+------+--------+--------+------------+
+| system_wrapper       |                                                   (top) |       7199 |       7097 |      96 |    6 | 6980 |      3 |      0 |          8 |
+|   (system_wrapper)   |                                                   (top) |          0 |          0 |       0 |    0 |    0 |      0 |      0 |          0 |
+|   system_i           |                                                  system |       7199 |       7097 |      96 |    6 | 6980 |      3 |      0 |          8 |
+|     (system_i)       |                                                  system |          0 |          0 |       0 |    0 |    0 |      0 |      0 |          0 |
+|     axi_lite_sc      |                                    system_axi_lite_sc_0 |        855 |        854 |       0 |    1 |  874 |      0 |      0 |          0 |
+|       inst           |                            system_axi_lite_sc_0_bd_7e9f |        855 |        854 |       0 |    1 |  874 |      0 |      0 |          0 |
+|     axis_mux         |                                       system_axis_mux_0 |         45 |         45 |       0 |    0 |    5 |      0 |      0 |          0 |
+|       inst           |                          system_axis_mux_0_axis_rr_mux4 |         45 |         45 |       0 |    0 |    5 |      0 |      0 |          0 |
+|     mad_multi        |                                      system_mad_multi_0 |        952 |        856 |      96 |    0 | 1140 |      3 |      0 |          5 |
+|       inst           |                   system_mad_multi_0_madgwick_multi_top |        952 |        856 |      96 |    0 | 1140 |      3 |      0 |          5 |
+|     nav_spi_ctrl_0   |                                 system_nav_spi_ctrl_0_0 |       1246 |       1246 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|       U0             |                    system_nav_spi_ctrl_0_0_nav_spi_ctrl |       1246 |       1246 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|     nav_spi_ctrl_1   |                                 system_nav_spi_ctrl_1_0 |       1242 |       1242 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|       U0             |                    system_nav_spi_ctrl_1_0_nav_spi_ctrl |       1242 |       1242 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|     nav_spi_ctrl_2   |                                 system_nav_spi_ctrl_2_0 |       1239 |       1239 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|       U0             |                    system_nav_spi_ctrl_2_0_nav_spi_ctrl |       1239 |       1239 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|     nav_spi_ctrl_3   |                                 system_nav_spi_ctrl_3_0 |       1240 |       1240 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|       U0             |                    system_nav_spi_ctrl_3_0_nav_spi_ctrl |       1240 |       1240 |       0 |    0 | 1081 |      0 |      0 |          0 |
+|     proc_sys_reset_0 |                               system_proc_sys_reset_0_0 |         17 |         16 |       0 |    1 |   33 |      0 |      0 |          0 |
+|       U0             |                system_proc_sys_reset_0_0_proc_sys_reset |         17 |         16 |       0 |    1 |   33 |      0 |      0 |          0 |
+|     ps7              |                                            system_ps7_0 |          0 |          0 |       0 |    0 |    0 |      0 |      0 |          0 |
+|       inst           | system_ps7_0_processing_system7_v5_5_processing_system7 |          0 |          0 |       0 |    0 |    0 |      0 |      0 |          0 |
+|     r2f_tid          |                                        system_r2f_tid_0 |        368 |        364 |       0 |    4 |  604 |      0 |      0 |          3 |
+|       inst           |                            system_r2f_tid_0_r2f_tid_top |        368 |        364 |       0 |    4 |  604 |      0 |      0 |          3 |
++----------------------+---------------------------------------------------------+------------+------------+---------+------+------+--------+--------+------------+
+* Note: The sum of lower-level cells may be larger than their parent cells total, due to cross-hierarchy LUT combining
+
+

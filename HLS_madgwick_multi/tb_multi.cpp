@@ -1,4 +1,4 @@
-// Testbench (csim): 4 IMUs sinteticas -> r2f_mux_top -> madgwick_multi_top, y comparacion
+// Testbench (csim): 4 IMUs sinteticas -> (arbitro, aqui modelado como cola unica con TID) -> r2f_tid_top -> madgwick_multi_top, y comparacion
 // bit a bit con el mismo nucleo ejecutado con UNA sola IMU (madgwick_single, NIMU=1).
 #include <cstdio>
 #include <cstdlib>
@@ -6,9 +6,9 @@
 #include <cstring>
 #include <vector>
 #include "madgwick_multi.h"
-#include "r2f_mux.h"
+#include "r2f_tid.h"
 
-void madgwick_single(hls::stream<ap_axis_id_t>&, float q_out[4], unsigned int frame_cnt[1], float, float, int);
+void madgwick_single(hls::stream<ap_axis_id_t>&, float q_out[4], unsigned int frame_cnt[1], float, float dt_imu[1], int);
 
 static unsigned f2u(float x) { unsigned u; memcpy(&u, &x, 4); return u; }
 enum { NF = 600 };
@@ -27,7 +27,7 @@ static void make_frame(int imu, int k, int raw[9]) {
 }
 
 int main() {
-    hls::stream<ap_axis_raw_t> in[4];
+    hls::stream<ap_axis_rawid_t> in_s;               // salida del arbitro axis_rr_mux4 (tramas completas, TID = IMU)
     hls::stream<ap_axis_fid_t> mid;
     hls::stream<ap_axis_id_t>  mad;
     hls::stream<ap_axis_id_t>  one[4];
@@ -44,14 +44,14 @@ int main() {
         if (i == 1 && (rng & 0x100)) continue;          // la IMU 1 va mas lenta
         if (sent[i] < NF) {
             for (int w = 0; w < 9; w++) {
-                ap_axis_raw_t a; a.data = rawf[i][sent[i]][w]; a.last = (w == 8); a.keep = -1;
-                in[i].write(a);
+                ap_axis_rawid_t a; a.data = rawf[i][sent[i]][w]; a.last = (w == 8); a.keep = -1; a.id = i;
+                in_s.write(a);
             }
             sent[i]++; total++;
         }
         // el nucleo procesa a ratos (para que haya tramas apiladas en varias entradas)
         if ((rng >> 8) % 3 == 0) {
-            r2f_mux_top(in[0], in[1], in[2], in[3], mid, 1);
+            while (!in_s.empty()) r2f_tid_top(in_s, mid, 1);
             while (!mid.empty()) {
                 // trasvase de la salida del mux a la entrada del nucleo multi
                 ap_axis_fid_t f = mid.read(); ap_axis_id_t g;
@@ -61,7 +61,7 @@ int main() {
         }
     }
     for (int r = 0; r < 4 * NF; r++) {                   // vaciar lo que quede en las entradas
-        r2f_mux_top(in[0], in[1], in[2], in[3], mid, 1);
+        while (!in_s.empty()) r2f_tid_top(in_s, mid, 1);
         while (!mid.empty()) {
             ap_axis_fid_t f = mid.read(); ap_axis_id_t g;
             g.data = f.data; g.last = f.last; g.id = f.id; g.keep = f.keep; mad.write(g); if (f.last) order.push_back((unsigned)f.id);
@@ -69,6 +69,7 @@ int main() {
         }
     }
     float qm[16] = {0}; unsigned cnt[4] = {0};
+    float dtv[NIMU] = {1.0f/119.0f, 1.0f/120.0f, 1.0f/118.0f, 1.0f/124.0f};   // dt distinto por IMU
     // El nucleo multi: primero un reset de las 4 IMUs (mascara 0xF) con 1 trama de cada una, luego beta=0.1
     // (como hace main.c). Aqui aplicamos el reset a la primera trama de cada IMU.
     std::vector<float> trace[4];
@@ -78,7 +79,7 @@ int main() {
         int mask = 0; for (int i = 0; i < 4; i++) if (seen[i] == 0) mask |= (1 << i);
         // para saber a que IMU pertenece la siguiente trama miramos su TID (solo en el banco de pruebas)
         unsigned id = order[nm];
-        madgwick_multi_top(mad, qm, cnt, 0.1f, 1.0f / 119.0f, mask);
+        madgwick_multi_top(mad, qm, cnt, 0.1f, dtv, mask);
         seen[id]++;
         for (int j = 0; j < 4; j++) trace[id].push_back(qm[4 * id + j]);
         nm++;
@@ -88,7 +89,7 @@ int main() {
     for (int i = 0; i < 4; i++) {
         float q1[4] = {0}; unsigned c1[1] = {0}; int first = 1; size_t pos = 0;
         while (!one[i].empty()) {
-            madgwick_single(one[i], q1, c1, 0.1f, 1.0f / 119.0f, first ? 1 : 0);   // primera trama: reset
+            madgwick_single(one[i], q1, c1, 0.1f, &dtv[i], first ? 1 : 0);   // primera trama: reset
             first = 0;
             for (int j = 0; j < 4; j++) {
                 if (f2u(trace[i][pos + j]) != f2u(q1[j])) bad++;

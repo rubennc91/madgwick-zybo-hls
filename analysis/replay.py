@@ -55,10 +55,15 @@ def make(T):
         return [q0*r,q1*r,q2*r,q3*r]
     return ahrs
 
-def pl_inputs(raw,cfg,goff,moff,fs=1):
+def pl_inputs(raw,cfg,goff,moff,fs=1,words=False):
     """Reproduce nav_spi_ctrl out_sample + raw2float scaling (float32 scale), returns float64 array (n,9) of exact float32 values."""
     raw=np.asarray(raw,dtype=np.int64); n=len(raw)
     out=np.zeros((n,9),dtype=np.int64)
+    if words:   # captura con instantanea v2: 'raw' ya son las palabras enviadas al nucleo (offsets y ejes aplicados)
+        out=raw.copy()
+        gs=np.float32(np.float32({0:8.75e-3,1:17.5e-3}.get(fs,70e-3))*np.float32(0.017453293))
+        f=out.astype(np.float32); f[:,:3]*=gs; f[:,3:]*=np.float32(1.0/16384.0)
+        return f
     for i in range(3):
         v=raw[:,i]-goff[i]; out[:,i]=-v if (cfg>>(3+i))&1 else v
         v=raw[:,3+i]; out[:,3+i]=-v if (cfg>>(9+i))&1 else v

@@ -28,7 +28,7 @@ typedef hls::axis<float, 0, NIMU_IDW, 0> ap_axis_id_t;   // float + TLAST + TID
 //  reset                MASCARA de bits: el bit i a 1 reinicia la IMU i en su
 //                       siguiente trama (el valor se captura al arrancar cada
 //                       invocacion, igual que en el nucleo de una IMU)
-//  beta, dt             comunes a todas las IMUs
+//  beta                comun a todas las IMUs;  dt_imu[i] (0x90) periodo de muestreo de la IMU i en s
 //
 // Una trama con TID >= NIMU se consume y se descarta.
 // -----------------------------------------------------------------------------
@@ -36,7 +36,7 @@ void madgwick_multi_top(hls::stream<ap_axis_id_t>& s_axis_imu,
                         float q_out[4 * NIMU],
                         unsigned int frame_cnt[NIMU],
                         float beta,
-                        float dt,
+                        float dt_imu[NIMU],
                         int reset);
 
 #endif

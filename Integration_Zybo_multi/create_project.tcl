@@ -2,13 +2,16 @@
 #
 # Integracion de VARIAS IMUs (hasta 4 Pmod NAV) con UN solo nucleo Madgwick en la Zybo Z7-10:
 #
-#   nav_spi_ctrl_0..3 (VHDL, uno por Pmod) --AXI-Stream--> r2f_mux (HLS: raw2float + reparto
-#   round-robin, TID = indice de la IMU) --AXI-Stream--> mad_multi (HLS: opt2 con un estado
-#   por IMU). El PS lo controla todo por AXI-Lite (sin DMA).
+#   nav_spi_ctrl_0..3 (VHDL, uno por Pmod) --AXI-Stream--> axis_mux (VHDL: arbitro round-robin
+#   por trama, TID = indice de la IMU) --> r2f_tid (HLS: raw2float, copia el TID) --AXI-Stream-->
+#   mad_multi (HLS: opt2 con un estado por IMU). El PS lo controla todo por AXI-Lite (sin DMA).
+#   (Antes el reparto lo hacia un bloque HLS r2f_mux con read_nb, que en hardware se comportaba
+#   como una ronda disparada por la IMU 3: ver README. Ya no se usa.)
 #
 # Estructura de carpetas esperada (este script se ejecuta desde Integration_Zybo_multi):
 #   PMOD_NAV_Ctrller/ip_repo/nav_spi_ctrl_v1.0/                    (package_nav_ip.tcl)
-#   HLS_madgwick_multi/r2f_mux_prj/sol1/impl/ip/                   (run_hls_r2f_mux.tcl)
+#   HLS_madgwick_multi/r2f_tid_prj/sol1/impl/ip/                   (run_hls_r2f_tid.tcl)
+#   Integration_Zybo_multi/axis_rr_mux4.vhd                        (fuente RTL, se anade al proyecto)
 #   HLS_madgwick_multi/madgwick_multi_prj/sol1/impl/ip/            (run_hls_madgwick_multi.tcl)
 
 set PART      "xc7z010clg400-1"
@@ -16,13 +19,13 @@ set PROJ_NAME "zybo_multi"
 set NIMU      4
 
 set NAV_IP_REPO   [file normalize "../PMOD_NAV_Ctrller/ip_repo"]
-set MUX_IP_REPO   [file normalize "../HLS_madgwick_multi/r2f_mux_prj/sol1/impl/ip"]
+set R2F_IP_REPO   [file normalize "../HLS_madgwick_multi/r2f_tid_prj/sol1/impl/ip"]
 set MULTI_IP_REPO [file normalize "../HLS_madgwick_multi/madgwick_multi_prj/sol1/impl/ip"]
 
-foreach p [list $NAV_IP_REPO $MUX_IP_REPO $MULTI_IP_REPO] {
+foreach p [list $NAV_IP_REPO $R2F_IP_REPO $MULTI_IP_REPO] {
     if {![file isdirectory $p]} {
         puts "AVISO: no existe '$p'."
-        puts "  -> Ejecuta antes package_nav_ip.tcl y los dos run_hls_*.tcl de HLS_madgwick_multi."
+        puts "  -> Ejecuta antes package_nav_ip.tcl y run_hls_r2f_tid.tcl y run_hls_madgwick_multi.tcl de HLS_madgwick_multi."
     }
 }
 
@@ -39,8 +42,12 @@ set ZYBO_BOARD [lindex [lsort -dictionary $zybo_boards] end]
 puts "Usando board_part: $ZYBO_BOARD"
 set_property board_part $ZYBO_BOARD [current_project]
 
-set_property ip_repo_paths [list $NAV_IP_REPO $MUX_IP_REPO $MULTI_IP_REPO] [current_project]
+set_property ip_repo_paths [list $NAV_IP_REPO $R2F_IP_REPO $MULTI_IP_REPO] [current_project]
 update_ip_catalog
+
+# Arbitro AXI-Stream en VHDL (modulo de referencia del diseno de bloques)
+add_files -norecurse [file normalize "./axis_rr_mux4.vhd"]
+update_compile_order -fileset sources_1
 
 create_bd_design "system"
 
@@ -55,7 +62,8 @@ set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {100} CONFIG.PCW_US
 for {set i 0} {$i < $NIMU} {incr i} {
     create_bd_cell -type ip -vlnv user.org:user:nav_spi_ctrl:1.0 nav_spi_ctrl_$i
 }
-create_bd_cell -type ip -vlnv xilinx.com:hls:r2f_mux_top:1.0 r2f_mux
+create_bd_cell -type module -reference axis_rr_mux4 axis_mux
+create_bd_cell -type ip -vlnv xilinx.com:hls:r2f_tid_top:1.0 r2f_tid
 create_bd_cell -type ip -vlnv xilinx.com:hls:madgwick_multi_top:1.0 mad_multi
 
 # --- Reloj y reset -----------------------------------------------------------
@@ -63,8 +71,8 @@ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_0
 connect_bd_net [get_bd_pins ps7/FCLK_CLK0] [get_bd_pins proc_sys_reset_0/slowest_sync_clk]
 connect_bd_net [get_bd_pins ps7/FCLK_RESET0_N] [get_bd_pins proc_sys_reset_0/ext_reset_in]
 
-set clk_pins [list ps7/M_AXI_GP0_ACLK r2f_mux/ap_clk mad_multi/ap_clk]
-set rst_pins [list r2f_mux/ap_rst_n mad_multi/ap_rst_n]
+set clk_pins [list ps7/M_AXI_GP0_ACLK axis_mux/aclk r2f_tid/ap_clk mad_multi/ap_clk]
+set rst_pins [list axis_mux/aresetn r2f_tid/ap_rst_n mad_multi/ap_rst_n]
 for {set i 0} {$i < $NIMU} {incr i} {
     lappend clk_pins nav_spi_ctrl_$i/clk
     lappend rst_pins nav_spi_ctrl_$i/rstn
@@ -72,7 +80,7 @@ for {set i 0} {$i < $NIMU} {incr i} {
 foreach p $clk_pins { connect_bd_net [get_bd_pins ps7/FCLK_CLK0] [get_bd_pins $p] }
 foreach p $rst_pins { connect_bd_net [get_bd_pins proc_sys_reset_0/peripheral_aresetn] [get_bd_pins $p] }
 
-# --- AXI-Lite: PS -> SmartConnect -> NIMU nav_spi_ctrl + r2f_mux + mad_multi -
+# --- AXI-Lite: PS -> SmartConnect -> NIMU nav_spi_ctrl + r2f_tid + mad_multi -
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_lite_sc
 set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI [expr {$NIMU + 2}]] [get_bd_cells axi_lite_sc]
 connect_bd_net [get_bd_pins ps7/FCLK_CLK0] [get_bd_pins axi_lite_sc/aclk]
@@ -82,13 +90,14 @@ for {set i 0} {$i < $NIMU} {incr i} {
     connect_bd_intf_net [get_bd_intf_pins axi_lite_sc/M0${i}_AXI] [get_bd_intf_pins nav_spi_ctrl_$i/s_axi]
 }
 connect_bd_intf_net [get_bd_intf_pins axi_lite_sc/M0${NIMU}_AXI] [get_bd_intf_pins mad_multi/s_axi_ctrl]
-connect_bd_intf_net [get_bd_intf_pins axi_lite_sc/M0[expr {$NIMU + 1}]_AXI] [get_bd_intf_pins r2f_mux/s_axi_ctrl]
+connect_bd_intf_net [get_bd_intf_pins axi_lite_sc/M0[expr {$NIMU + 1}]_AXI] [get_bd_intf_pins r2f_tid/s_axi_ctrl]
 
-# --- AXI4-Stream: nav_spi_ctrl_i -> r2f_mux/s_axisI ; r2f_mux -> mad_multi ----
+# --- AXI4-Stream: nav_spi_ctrl_i -> axis_mux/Si_AXIS ; axis_mux -> r2f_tid -> mad_multi ----
 for {set i 0} {$i < $NIMU} {incr i} {
-    connect_bd_intf_net [get_bd_intf_pins nav_spi_ctrl_$i/m_axis] [get_bd_intf_pins r2f_mux/s_axis$i]
+    connect_bd_intf_net [get_bd_intf_pins nav_spi_ctrl_$i/m_axis] [get_bd_intf_pins axis_mux/S${i}_AXIS]
 }
-connect_bd_intf_net [get_bd_intf_pins r2f_mux/m_axis] [get_bd_intf_pins mad_multi/s_axis_imu]
+connect_bd_intf_net [get_bd_intf_pins axis_mux/M_AXIS] [get_bd_intf_pins r2f_tid/s_axis]
+connect_bd_intf_net [get_bd_intf_pins r2f_tid/m_axis] [get_bd_intf_pins mad_multi/s_axis_imu]
 
 # --- Pines SPI externos (nombres fijos: spi_*_0 .. spi_*_3, los usa el XDC) ----
 for {set i 0} {$i < $NIMU} {incr i} {
@@ -98,14 +107,14 @@ for {set i 0} {$i < $NIMU} {incr i} {
 }
 
 # --- Direcciones fijas (las usa main.c) -----------------------------------------
-#   nav_spi_ctrl_i 0x40000000 + 0x10000*i (4K) ; mad_multi 0x40040000 ; r2f_mux 0x40050000
+#   nav_spi_ctrl_i 0x40000000 + 0x10000*i (4K) ; mad_multi 0x40040000 ; r2f_tid 0x40050000 (R2F_BASE)
 if {[catch {
     for {set i 0} {$i < $NIMU} {incr i} {
         assign_bd_address -offset [expr {0x40000000 + 0x10000 * $i}] -range 0x1000 \
             -target_address_space [get_bd_addr_spaces ps7/Data] [get_bd_addr_segs nav_spi_ctrl_$i/s_axi/reg0]
     }
     assign_bd_address -offset 0x40040000 -range 0x10000 -target_address_space [get_bd_addr_spaces ps7/Data] [get_bd_addr_segs mad_multi/s_axi_ctrl/Reg]
-    assign_bd_address -offset 0x40050000 -range 0x10000 -target_address_space [get_bd_addr_spaces ps7/Data] [get_bd_addr_segs r2f_mux/s_axi_ctrl/Reg]
+    assign_bd_address -offset 0x40050000 -range 0x10000 -target_address_space [get_bd_addr_spaces ps7/Data] [get_bd_addr_segs r2f_tid/s_axi_ctrl/Reg]
 } err]} {
     puts "AVISO: asignacion explicita de direcciones fallo ($err); se usa la automatica."
     puts "       Revisa las direcciones impresas por build_project.tcl y ajusta main.c."

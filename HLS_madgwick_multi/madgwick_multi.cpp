@@ -25,15 +25,15 @@ void madgwick_multi_top(hls::stream<ap_axis_id_t>& s_axis_imu,
                         float q_out[4 * NIMU],
                         unsigned int frame_cnt[NIMU],
                         float beta,
-                        float dt,
+                        float dt_imu[NIMU],
                         int reset) {
 #pragma HLS INTERFACE axis     port=s_axis_imu
 // Mapa de registros fijado a mano (main.c depende de el): no lo cambies sin cambiar main.c.
 #pragma HLS INTERFACE s_axilite port=beta      bundle=ctrl offset=0x10
-#pragma HLS INTERFACE s_axilite port=dt        bundle=ctrl offset=0x18
 #pragma HLS INTERFACE s_axilite port=reset     bundle=ctrl offset=0x20
 #pragma HLS INTERFACE s_axilite port=q_out     bundle=ctrl offset=0x40
 #pragma HLS INTERFACE s_axilite port=frame_cnt bundle=ctrl offset=0x80
+#pragma HLS INTERFACE s_axilite port=dt_imu    bundle=ctrl offset=0x90
 #pragma HLS INTERFACE s_axilite port=return bundle=ctrl
 #pragma HLS ALLOCATION operation instances=fmul limit=1
 #pragma HLS ALLOCATION operation instances=fadd limit=1
@@ -65,7 +65,7 @@ void madgwick_multi_top(hls::stream<ap_axis_id_t>& s_axis_imu,
     } else {
         for (int k = 0; k < 4; k++) R[9 + k] = q_state[id][k];
         R[13] = beta;
-        R[14] = dt;
+        R[14] = dt_imu[id];                      // dt propio de cada IMU (periodo real de su sensor)
         for (int k = 0; k < MP_NCONST; k++) R[MP_CBASE + k] = u2f(MP_CONST_BITS[k]);
 
         // Rama: sin acelerometro -> solo giroscopio; sin magnetometro -> IMU.

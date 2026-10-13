@@ -1,7 +1,7 @@
 # madgwick-zybo-hls
 
 Filtro de orientación **Madgwick (MARG)** completamente en FPGA para una **Zybo Z7-10** (xc7z010clg400-1),
-con un **Pmod NAV** (LSM9DS1 + LPS25HB) en el conector **JE**.
+con un **Pmod NAV** (LSM9DS1 + LPS25HB) en el conector **JE**, y una variante de **1 a 4 Pmod NAV servidos por un único núcleo Madgwick** (v0.4.0).
 Herramientas: Vivado / Vitis / Vitis HLS **2023.2.1**.
 
 ```
@@ -24,8 +24,8 @@ PS (Zynq) solo por AXI-Lite: configuración, calibración y lectura de q por UAR
 | `Integration_Zybo_opt2/` | Misma integración con el núcleo **opt2** (proyecto `zybo_opt2`, `AXIS_CFG_PRESET 0x039`) |
 | `analysis/` | `replay.py` (modelo del filtro en float32/float64), `analyze_dual.py` (error numérico de cada núcleo), `analyze_poses.py` (prueba de poses con un cubo, incl. escala del giroscopio) y `analyze_multi.py` (varias IMUs). Necesitan `numpy` y `matplotlib` |
 | `data/` | Capturas CSV de la UART (texto, ~1 MB cada una) usadas en los resultados; ver `data/README.md` |
-| `HLS_madgwick_multi/` | **Un solo núcleo para varias IMUs**: `madgwick_multi` (opt2 con un estado `q` por IMU, identificadas por TID) y `r2f_mux` (raw2float + reparto round-robin de 4 entradas). Incluye banco de pruebas en C (`test_pc.sh`) |
-| `Integration_Zybo_multi/` | Integración de **4 Pmod NAV** (JE, JD, JC, JA) con un único núcleo Madgwick (proyecto `zybo_multi`) |
+| `HLS_madgwick_multi/` | **Un solo núcleo para varias IMUs**: `madgwick_multi` (opt2 con un estado `q` y un `dt` por IMU, identificadas por TID) y `r2f_tid` (raw2float que conserva el TID). Incluye banco de pruebas en C (`test_pc.sh`) |
+| `Integration_Zybo_multi/` | Integración de **1 a 4 Pmod NAV** (JE, JD, JC, JA) con un único núcleo Madgwick (proyecto `zybo_multi`). `axis_rr_mux4.vhd` es el árbitro round-robin de las 4 entradas; `report_multi.tcl` extrae timing, utilización y potencia |
 | `Integration_Zybo_dual/` | **Los dos núcleos a la vez** (original y opt2) alimentados con la misma trama por un `axis_broadcaster`; `main.c` compara sus cuaterniones y captura un CSV para el análisis offline |
 
 ## Reproducir desde cero
@@ -121,29 +121,84 @@ Hallazgos:
 ## Varias IMUs con un único núcleo
 
 ```
-Pmod NAV 0..3 -> nav_spi_ctrl_0..3 --AXI-Stream--> r2f_mux --(TID = IMU)--> madgwick_multi
-                                                       (raw2float + round-robin)   q_out[4*i..4*i+3], frame_cnt[i]
+Pmod NAV 0..3 -> nav_spi_ctrl_0..3 --AXI-Stream--> axis_rr_mux4 --(TID = IMU)--> r2f_tid --> madgwick_multi
+                                                    (VHDL, round-robin por trama)  (HLS)       q_out[4*i..4*i+3], frame_cnt[i], dt_imu[i]
 ```
 
-* `madgwick_multi` es el núcleo opt2 (mismo programa en ROM, mismos 5 DSP) con un estado `q` por IMU. Cada invocación lee una trama de 9 floats, toma el TID de la primera palabra, actualiza el estado de esa IMU y deja su cuaternión en `q_out`. `reset` es una **máscara** (bit i reinicia la IMU i); `beta` y `dt` son comunes.
-* `r2f_mux` convierte los enteros crudos a float (mismo escalado que `raw2float_top`) y reparte por turnos las tramas de 4 entradas hacia una única salida con TID.
-* Coste: a 100 MHz una actualización tarda ≤ 2 937 ciclos (29,4 µs), es decir, ≈ 3,5 ms de cada 1000 ms por IMU a 119 Hz; el límite teórico del núcleo es de unas 280 IMUs a 119 Hz (cota teórica; no medida). Cada IMU adicional cuesta un `nav_spi_ctrl` y 5 pines.
-* Mapa de direcciones: `nav_spi_ctrl_i` en 0x40000000 + 0x10000·i; `madgwick_multi` 0x40040000 (`beta` 0x10, `dt` 0x18, `reset` 0x20, `q_out` 0x40, `frame_cnt` 0x80); `r2f_mux` 0x40050000 (`fs_g` 0x10). Los offsets del HLS están fijados con `offset=` en los `#pragma`.
-* Pines: IMU0 en JE, IMU1 en JD, IMU2 en JC, IMU3 en JA (ver `zybo_z7_10_pmod_nav_x4.xdc`, pines de `Zybo-Z7-Master.xdc` de Digilent). En la Zybo Z7-10, JB es solo de la Z7-20 y JF está en MIO (PS), sin acceso directo desde la PL; JA es el Pmod del XADC y se usa aquí como E/S digital.
+* `madgwick_multi` es el núcleo opt2 (mismo programa en ROM, mismos 5 DSP) con un estado `q` por IMU. Cada invocación lee una trama de 9 floats, toma el TID de la primera palabra, actualiza el estado de esa IMU y deja su cuaternión en `q_out`. `reset` es una **máscara** (bit i reinicia la IMU i); `beta` es común y **`dt` es propio de cada IMU** (`dt_imu[4]`, ver más abajo).
+* `axis_rr_mux4` (VHDL) reparte por turnos las tramas completas (9 palabras) de las 4 entradas hacia una única salida, añadiendo el TID. Es determinista: una IMU sin datos no bloquea a las demás, y con 1, 2 o 3 IMUs conectadas funciona igual.
+* `r2f_tid` convierte los enteros crudos a float (mismo escalado que `raw2float_top`) y copia el TID de entrada a la salida.
+* Coste del núcleo: a 100 MHz una actualización tarda ≤ 2 937 ciclos (29,4 µs), es decir, ≈ 3,5 ms de cada 1000 ms por IMU a 119 Hz; el límite teórico del núcleo es de unas 280 IMUs a 119 Hz (cota calculada, no medida). Cada IMU adicional cuesta un `nav_spi_ctrl` y 5 pines.
+* Mapa de direcciones: `nav_spi_ctrl_i` en 0x40000000 + 0x10000·i; `madgwick_multi` 0x40040000 (`beta` 0x10, `reset` 0x20, `q_out` 0x40, `frame_cnt` 0x80, **`dt_imu` 0x90**: 4 floats, en segundos); `r2f_tid` 0x40050000 (`fs_g` 0x10). Los offsets del HLS están fijados con `offset=` en los `#pragma`. (En v0.3.0 `dt` era un único registro en 0x18; ya no existe.)
+* Pines: IMU0 en JE, IMU1 en JD, IMU2 en JC, IMU3 en JA (ver `zybo_z7_10_pmod_nav_x4.xdc`, pines de `Zybo-Z7-Master.xdc` de Digilent). En la Zybo Z7-10, JB es solo de la Z7-20 y JF está en MIO (PS), sin acceso directo desde la PL; JA es el Pmod del XADC y se usa aquí como E/S digital. En las pruebas, la placa de JA está montada girada 90° respecto a las otras tres.
 * Calibración: el sesgo del giroscopio se mide al arrancar con todo quieto (`GYRO_AT_BOOT`, o `GYRO_PRESET`); el hard-iron del magnetómetro depende del montaje, no del arranque, y se fija con `MAG_PRESET`. La tecla `M` calibra los 4 magnetómetros a la vez girando el conjunto (cuerpo rígido); tras cada calibración la UART imprime los presets en formato C.
 
-Prueba sin placa: `cd HLS_madgwick_multi && ./test_pc.sh`. Genera 4 IMUs sintéticas con cadencias distintas, las pasa por el mux y compara la salida de `madgwick_multi` con 4 núcleos de una sola IMU: 9 600 valores, 0 diferencias (bit a bit).
+### `dt` por IMU
 
-Reproducir:
+Cada LSM9DS1 muestrea con su propio reloj: el ODR nominal es 119 Hz, pero el periodo real de las cuatro placas de las pruebas es 8,280 / 8,307 / 8,480 / 8,057 ms (120,77 / 120,37 / 117,92 / 124,11 Hz), constante dentro de cada captura (variación < 0,02 ms) y estable en un registro de 16 minutos. Con un `dt` fijo de 1/119 s el giroscopio se integraría con un error de escala de +1,5 / +1,2 / −0,9 / +4,3 %. Por eso `dt` es un registro por IMU (`DT_IMU[]` en `main.c`). El periodo se mide con el contador de ciclos de `nav_spi_ctrl` (ver registros de instantánea) y `analyze_multi.py` imprime el valor medio de cada IMU para actualizarlo si se cambian las placas. El acelerómetro y el magnetómetro limitan la deriva del filtro aunque `dt` sea inexacto (por eso la coherencia entre IMUs cambia poco), pero el `dt` correcto importa para la exactitud absoluta del ángulo.
+
+### Por qué un árbitro en VHDL y no en HLS (historia de v0.3.0)
+
+La primera versión repartía las 4 entradas con un bloque HLS (`r2f_mux`, lectura no bloqueante en round-robin). En placa funcionaba como rondas sincronizadas con la entrada 3: las IMU 0–2 esperaban en el estado `S_STREAM` hasta 1–2 periodos de muestreo (mediana de 7,9 / 7,1 / 4,0 ms), perdían muestras del sensor (≈15 % de intervalos de 16 ms) y con menos de 4 IMUs no llegaba ninguna trama al núcleo. No se llegó a identificar la causa dentro del RTL generado por HLS; se sustituyó por `axis_rr_mux4.vhd`, validado con un modelo de ciclos en Python (todos los subconjuntos de entradas activas) y en placa. Con el árbitro nuevo la espera máxima en `S_STREAM` es de 7,7–17,6 µs (0,1 µs típico).
+
+### Instantánea hardware en `nav_spi_ctrl` (v2)
+
+Para registrar cada trama sin carreras con la adquisición siguiente, `nav_spi_ctrl` guarda en registros la última trama enviada al núcleo y dos marcas de tiempo de un contador de ciclos de 32 bits a 100 MHz (envuelve cada 42,9 s; es común a todas las IMUs): `0x74` SNAP_SEQ, `0x78` SNAP_TS_GDA (instante del dato nuevo del giroscopio), `0x7C` SNAP_TS_END, `0x80..0xA0` SNAP_W0..W8 (las 9 palabras tal como se enviaron al núcleo), `0xA4` STREAM_LAST y `0xA8` STREAM_MAX (ciclos máximos en `S_STREAM`). `main.c` lee la instantánea de forma atómica (comprueba `SNAP_SEQ` antes y después) y la compara con `frame_cnt` del núcleo; la fila es válida (`ok=1`) solo si coinciden.
+
+### Resultados en placa
+
+Cuatro Pmod NAV (JE, JD, JC, JA), un único núcleo, 100 MHz. Capturas en `data/` (se analizan con `analyze_multi.py`):
+
+| Captura | Duración | Giro acumulado | Pico \|ω\| | Coherencia media (máx.) IMU0–1 / 0–2 / 0–3 |
+|---|---|---|---|---|
+| `multi_3vueltas.log` | 60 s | ≈ 2 950° (yaw 845°, pitch 1 077°, roll 1 021°) | 332 °/s, sin saturar | 1,6° (6,3) / 2,0° (6,4) / 4,2° (12,4) |
+| `multi_5500deg_60s.log` | 60 s | ≈ 5 500° | 538 °/s (5 muestras sobre el fondo de escala de 500 °/s) | 2,8° (8,7) / 5,1° (14,3) / 9,1° (17,7) |
+| `multi_5460deg_90s.log` | 90 s | ≈ 5 460° (yaw 1 250°, pitch 1 790°, roll 2 040°) | 457 °/s, sin saturar | 1,9° (6,3) / 3,5° (12,1) / 6,9° (17,0) |
+| `multi_reposo_16min.log` | ≈ 16 min | reposo | — | no es un CSV: líneas de estado cada ≈ 0,23 s |
+
+* **Adquisición y reparto**: 0 huecos de muestras del sensor en ninguna IMU (la pérdida de unas 11 filas de 43 000 del 90 s se debe al enlace serie, y el filtro no pierde ninguna trama: `fc − cnt` constante); sin intervalos de 16 ms; espera máxima en `S_STREAM` de 17,6 µs; las cuatro IMUs avanzan a su propio ritmo (120,77 / 120,37 / 117,92 / 124,11 Hz).
+* **Equivalencia numérica**: el núcleo coincide con el modelo en float32 (`replay.py`) con una diferencia máxima de 1,7e-4° en todas las capturas (con el `dt` de cada IMU), y con float64 de 1,7e-4°. Esto mide el error de cálculo del núcleo, **no** la exactitud de la orientación.
+* **Estabilidad**: en el registro de ≈ 16 minutos, `err=0` y `fc == nav` hasta el final en las 16 376 líneas de estado (en 104 difieren en 1 porque `main.c` lee los dos contadores en instantes distintos); las razones entre las frecuencias de las IMUs se mantienen; con las placas quietas el yaw de cada IMU varía ±0,5° de t=56 s a t=960 s (sin deriva apreciable).
+* **Coherencia entre IMUs** (`analyze_multi.py --rigid`): desviación de la rotación relativa IMU0→IMUj respecto a su media, con los cuatro sensores fijados rígidamente a la misma placa. La rotación media IMU0→IMU3 es ≈ 90–94°, que es el giro físico del montaje de JA, y se resta. Es una medida de **consistencia relativa**, no de exactitud absoluta: no hay referencia externa. La desviación crece con la velocidad de giro (más a 540 °/s que a 330 °/s) y se recupera al parar; con las placas quietas al final de la captura de 90 s queda en ≈ 1,2° / 2,2° / 5,1°. Los saltos bruscos que se ven en la gráfica coinciden con golpes del cable USB sobre las placas. Posibles causas del residuo (sin verificar): diferencias de sensibilidad del giroscopio entre placas (≤ 0,8 %), calibración del magnetómetro de cada placa, tolerancia mecánica del montaje.
+* **Recursos, timing y potencia**: ver la tabla siguiente.
+
+### Recursos, timing y potencia (4 IMUs, post-implementación)
+
+Sistema completo (PS + 4 `nav_spi_ctrl` v2 + `axis_rr_mux4` + `r2f_tid` + `madgwick_multi` + SmartConnect), xc7z010, reloj de 100 MHz, Vivado 2023.2.1. Informes completos en `Integration_Zybo_multi/reports/` (generados con `report_multi.tcl`).
+
+| Recurso | Usado | Disponible | % |
+|---|---|---|---|
+| Slice LUT | 7 199 | 17 600 | 40,9 |
+| Slice FF | 6 980 | 35 200 | 19,8 |
+| DSP48E1 | 8 | 80 | 10,0 |
+| RAMB36 | 3 | 60 | 5,0 |
+
+| Bloque | LUT | FF | DSP | RAMB36 |
+|---|---|---|---|---|
+| `madgwick_multi` (4 estados, 4 `dt`) | 952 | 1 140 | 5 | 3 |
+| `nav_spi_ctrl` (cada una, ×4) | 1 239–1 246 | 1 081 | 0 | 0 |
+| `r2f_tid` | 368 | 604 | 3 | 0 |
+| `axis_rr_mux4` | 45 | 5 | 0 | 0 |
+| SmartConnect AXI-Lite | 855 | 874 | 0 | 0 |
+
+* **Timing** (100 MHz): se cumplen todas las restricciones. WNS +0,142 ns, WHS +0,026 ns, sin endpoints fallidos (17 522). Es un margen de setup menor que el de opt2 con una IMU (+0,691 ns): el diseño de 4 IMUs es más grande y no se ha optimizado el timing.
+* **Potencia estimada**: 1,568 W en total, de los cuales 1,400 W son el PS7; la lógica programable aporta unos 0,047 W dinámicos y 0,121 W estáticos. La confianza del informe es baja (sin actividad de simulación); úsala solo como orden de magnitud.
+* **Coste por IMU**: un `nav_spi_ctrl` (≈ 1 240 LUT / 1 081 FF) y 5 pines; el núcleo Madgwick, `r2f_tid` y el árbitro no crecen de forma apreciable. Las 4 `nav_spi_ctrl` ocupan el 69 % de las LUT del diseño.
+* **Coste de la instantánea (v2)**: cada `nav_spi_ctrl` pasó de ≈ 990 LUT / 613 FF (v0.3.0) a ≈ 1 240 LUT / 1 081 FF por los registros de instantánea y el contador de ciclos (+250 LUT, +468 FF por IMU). Es instrumentación para registrar y medir; un diseño sin ella sería más pequeño (no se ha sintetizado esa variante).
+
+### Reproducir
+
 ```
-cd HLS_madgwick_multi && vitis_hls -f run_hls_r2f_mux.tcl && vitis_hls -f run_hls_madgwick_multi.tcl
+cd HLS_madgwick_multi && vitis_hls -f run_hls_r2f_tid.tcl && vitis_hls -f run_hls_madgwick_multi.tcl
+cd ../PMOD_NAV_Ctrller && vivado -mode batch -source package_nav_ip.tcl      # nav_spi_ctrl v2
 cd ../Integration_Zybo_multi && vivado -mode batch -source create_project.tcl
 vivado -mode batch -source build_project.tcl     # exporta zybo_multi.xsa
-python analysis/analyze_multi.py data/captura_multi.log --rigid --png fig_multi.png
+vivado -mode batch -source report_multi.tcl      # timing / utilizacion / potencia en ./reports/
+python analysis/analyze_multi.py data/multi_5460deg_90s.log --rigid --png fig_multi.png
 ```
-Teclas del `main.c` multi: `0..3` selecciona IMU, `g` gyro (todas), `m` mag (la seleccionada), `M` mag (todas a la vez), `c` borrar offsets, `r` reset, `a`/`b` ejes 0x018/0x039, `l`/`L` captura (30 s, todas las IMUs), `d` volcar de nuevo.
+Prueba sin placa: `cd HLS_madgwick_multi && ./test_pc.sh` (4 IMUs sintéticas con cadencias y `dt` distintos, comparación bit a bit con 4 núcleos de una sola IMU: 9 600 valores, 0 diferencias).
 
-> Estado: simulado en C (bit a bit) y con análisis offline probado con datos sintéticos; **pendiente de probar en placa**.
+Teclas del `main.c` multi: `0..3` selecciona IMU, `g` gyro (todas), `m` mag (la seleccionada), `M` mag (todas a la vez), `c` borrar offsets, `r` reset, `a`/`b` ejes 0x018/0x039, `l`/`L` captura (`LOG_SECONDS`, todas las IMUs; `l` conserva el estado del filtro, `L` lo reinicia), `d` volcar de nuevo. Ajusta al principio de `main.c`: `N_IMU` (1..4), `DT_IMU[]`, `GYRO_PRESET`/`MAG_PRESET` y `LOG_SECONDS`. La captura se guarda en RAM y se vuelca por UART al terminar, así que el cable solo hace falta para alimentar la placa y lanzarla. Guarda la salida del terminal en un fichero (Tera Term: File > Log).
 
 ## Conexión del Pmod NAV (JE)
 
@@ -168,14 +223,15 @@ Valores validados para esta placa y montaje:
 * Rango del giróscopo 500 dps (`FS_G_SELECTED = 1`, igual en `nav_spi_ctrl` y `raw2float`).
 * Los offsets del magnetómetro dependen del lugar y del montaje: vuelve a calibrar con `m` si cambian.
 
-Registros de `nav_spi_ctrl` (base `0x40000000`): `0x00` CTRL, `0x04` ODR_CFG, `0x08` RANGE_CFG, `0x0C` APPLY_CFG, `0x20..0x28` offset gyro, `0x2C..0x34` offset mag, `0x38` AXIS_CFG, `0x40` STATUS, `0x44` SAMPLE_CNT, `0x48` WHO_AM_I, `0x50..0x70` muestra cruda.
+Registros de `nav_spi_ctrl` (base `0x40000000`): `0x00` CTRL, `0x04` ODR_CFG, `0x08` RANGE_CFG, `0x0C` APPLY_CFG, `0x20..0x28` offset gyro, `0x2C..0x34` offset mag, `0x38` AXIS_CFG, `0x40` STATUS, `0x44` SAMPLE_CNT, `0x48` WHO_AM_I, `0x50..0x70` muestra cruda; desde v0.4.0 también `0x74..0xA8` (instantánea, ver «Varias IMUs»).
 
 ## Estado
 
 * Prueba de concepto validada: adquisición a 119 Hz, ejes, calibración, escala del giróscopo (giro de 360°) e independencia del yaw respecto a la inclinación.
 * Versión opt2 verificada en placa: sin errores, |q|² = 1 en todas las lecturas, 119 Hz, giro de 360° completo sin saltos. La primera lectura tras el arranque muestra el estado inicial del filtro, q = (-1, 0, 0, 0,2), con |q|² = 1,04; es el valor de semilla del diseño, igual que en la versión original.
 * Sistema dual (original + opt2 con la misma entrada) verificado en placa: diferencias ≤ 1e-4° respecto a doble precisión y entre ellos, sin acumulación.
-* Siguiente: probar en placa el diseño de 4 IMUs con un núcleo (`Integration_Zybo_multi`) y medir cuántas IMUs soporta el núcleo.
+* **v0.4.0**: diseño de 1 a 4 IMUs con un único núcleo verificado en placa (árbitro VHDL, `dt` por IMU, instantánea hardware): sin esperas en el stream, sin pérdida de muestras, error numérico ≤ 1,7e-4°, 16 minutos sin errores ni deriva. Con 4 IMUs: 7 199 LUT (40,9 %), 6 980 FF, 8 DSP, 3 RAMB36; timing cumplido (WNS +0,142 ns a 100 MHz).
+* Pendiente: calibración del magnetómetro de la IMU de JA (mayor residuo de coherencia); capturas sin cable y con referencia externa; frecuencia de muestreo mayor (ODR de 238–952 Hz en acelerómetro/giroscopio).
 
 ## Licencia
 MIT, ver `LICENSE`.

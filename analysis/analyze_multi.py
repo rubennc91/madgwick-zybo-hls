@@ -28,9 +28,10 @@ def load_multi(path):
             p = l.split(',')
             d = dict(kv.split('=', 1) for kv in p[2:])
             imus[int(p[1])] = d
-        elif l and l[0].isdigit() and l.count(',') == 17:
+        elif l and l[0].isdigit() and l.count(',') in (17, 20):
             p = l.split(',')
-            rows.append([int(p[0]), int(p[1]), int(p[2]), int(p[3])] + [int(x) for x in p[4:13]] + [f_(x) for x in p[13:17]] + [int(p[17])])
+            ex = [int(x) for x in p[18:21]] if len(p) == 21 else [0, 0, 0]       # v2: ts_gda, ts_end, str_cyc
+            rows.append([int(p[0]), int(p[1]), int(p[2]), int(p[3])] + [int(x) for x in p[4:13]] + [f_(x) for x in p[13:17]] + [int(p[17])] + ex)
     return hdr, imus, np.array(rows, dtype=np.float64)
 
 def qmean(Q):
@@ -54,8 +55,21 @@ def main():
     ser, err = {}, {}
     for i in range(nimu):
         sel = D[:, 0] == i
+        DT = (int(hdr['dt_us'].split('/')[i]) * 1e-6) if 'dt_us' in hdr else 1/119.0   # dt real que uso el nucleo
         idx = np.where(sel)[0]
-        S = D[sel]; cnt, fc, t, raw, Q, ok = S[:, 1], S[:, 2], S[:, 3] * 1e-6, S[:, 4:13].astype(np.int64), S[:, 13:17], S[:, 17]
+        S = D[sel]
+        snap = hdr.get('snap') == '1'
+        if snap:
+            # filas corruptas por el puerto serie: el contador del nucleo no coincide con el del nav (fc != cnt)
+            good = S[:, 2] == S[:, 1]
+            if (~good).any(): print('\nIMU%d: %d fila(s) descartada(s) por fc != cnt (corrupcion en el enlace serie)' % (i, int((~good).sum())))
+            S = S[good]
+            rt = S[:, 18]; wraps = np.r_[0, np.cumsum(np.diff(rt) < -2**31)]
+            thw = (rt + wraps * 2.0**32) / 1e8                 # reloj de hardware (100 MHz), desenrollado (32 bits = 42,9 s)
+            t = thw - thw[0]
+        else:
+            t = S[:, 3] * 1e-6
+        cnt, fc, raw, Q, ok = S[:, 1], S[:, 2], S[:, 4:13].astype(np.int64), S[:, 13:17], S[:, 17]
         info = imus[i]
         cfg = int(info['axis_cfg'], 16)
         goff = [int(x) for x in info['goff'].split('/')]; moff = [int(x) for x in info['moff'].split('/')]
@@ -64,7 +78,27 @@ def main():
         print('\nIMU%d: %d filas, %.2f Hz, huecos en cnt: %d, filas ok=0: %d, desfase fc-cnt: %s' %
               (i, len(S), rate, int((np.diff(cnt) != 1).sum()), int((ok == 0).sum()),
                'constante (%d)' % dfc[0] if (dfc == dfc[0]).all() else 'VARIABLE (min %d, max %d)' % (dfc.min(), dfc.max())))
-        inp = pl_inputs(raw, cfg, goff, moff, fs=fs)
+        inp = pl_inputs(raw, cfg, goff, moff, fs=fs, words=snap)
+        gaps = np.where(np.diff(cnt) != 1)[0]
+        if snap:                                   # temporizacion medida en hardware (reloj de 100 MHz)
+            sc = S[:, 20]
+            dtc = (np.diff(t) * 1e3)[np.diff(cnt) == 1]          # solo entre tramas contiguas del log
+            med = np.median(dtc); lost = int((dtc > 1.5 * med).sum())
+            print('   HW: intervalo entre tramas mediana %.3f ms (%.2f Hz), >1.5x: %d (%.1f %%), min %.3f max %.3f ms; '
+                  'S_STREAM max %.1f us' % (med, 1e3 / med, lost, 100.0 * lost / len(dtc), dtc.min(), dtc.max(), sc.max() / 100.0))
+        if len(gaps):                              # el log perdio tramas: se evalua por segmentos contiguos
+            seg = np.split(np.arange(len(S)), gaps + 1)
+            print('   (%d hueco(s) en el log -> %d segmentos; el filtro no los perdio: fc-cnt constante)' % (len(gaps), len(seg)))
+            e32l, e64l = [], []
+            for sg in seg:
+                if len(sg) < 3: continue
+                e32l.append(ang(run(np.float32, inp[sg], -1, dt=DT, seed=tuple(Q[sg[0]]))[1:], Q[sg[1:]]))
+                e64l.append(ang(run(np.float64, inp[sg], -1, dt=DT, seed=tuple(Q[sg[0]]))[1:], Q[sg[1:]]))
+            e32, e64 = np.concatenate(e32l), np.concatenate(e64l)
+            print('   nucleo vs modelo float32 (por segmento): media %.2e  max %.2e deg ; filas > 1e-3 deg: %d' % (e32.mean(), e32.max(), int((e32 > 1e-3).sum())))
+            print('   nucleo vs float64        (por segmento): media %.2e  max %.2e deg' % (e64.mean(), e64.max()))
+            ser[i] = dict(t=t, Q=Q); err[i] = np.r_[0.0, e64][:len(t)] if len(e64) + 1 >= len(t) else np.r_[np.zeros(len(t) - len(e64)), e64]
+            continue
         reset_mode = np.allclose(Q[0], SEED, atol=1e-6)
         seed = tuple(SEED) if reset_mode else tuple(Q[0])
         n_before = int((idx < beta_row).sum())          # tramas de esta IMU anteriores al cambio de beta
@@ -72,11 +106,11 @@ def main():
         cands = [n_before + lat for lat in (0, 1, 2, 3)]      # el valor de beta se captura al arrancar cada invocacion
         if not reset_mode: cands = [-1] + cands               # sin reset: beta ya en regimen o cambia durante la captura
         for sw_c in cands:
-            R32 = run(np.float32, inp, sw_c, seed=seed)
+            R32 = run(np.float32, inp, sw_c, dt=DT, seed=seed)
             m = ang(R32, Q).max()
             if best is None or m < best[0]: best = (m, sw_c, R32)
         m32, sw, R32 = best
-        R64 = run(np.float64, inp, sw, seed=seed)
+        R64 = run(np.float64, inp, sw, dt=DT, seed=seed)
         e32, e64 = ang(R32, Q), ang(R64, Q)
         print('   modo %s, beta cambia en la trama %d de esta IMU' % ('reset (semilla)' if reset_mode else 'sin reset', sw))
         print('   nucleo vs modelo float32: media %.2e  max %.2e deg' % (e32.mean(), e32.max()))

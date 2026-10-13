@@ -1,12 +1,12 @@
 // main.c -- Varias IMUs (hasta 4) servidas por UN solo nucleo Madgwick (Zybo Z7-10)
 //
 // Cadena en la PL:
-//   4 x { Pmod NAV (SPI) -> nav_spi_ctrl_i }  -> r2f_mux (raw2float + round-robin, TID = IMU)
+//   4 x { Pmod NAV (SPI) -> nav_spi_ctrl_i }  -> axis_rr_mux4 (arbitro round-robin, TID = IMU) -> r2f_tid (raw2float)
 //   -> mad_multi (un estado q por IMU)  -> q_out[4*i..4*i+3], frame_cnt[i]  (AXI-Lite)
 //
 // Mapa de direcciones (fijado en create_project.tcl):
 //   nav_spi_ctrl_0..3 0x40000000 / 0x40010000 / 0x40020000 / 0x40030000
-//   mad_multi 0x40040000     r2f_mux 0x40050000
+//   mad_multi 0x40040000     r2f_tid 0x40050000
 // Offsets del nucleo multi: fijados con "offset=" en madgwick_multi.cpp (ver abajo).
 // Teclas: 0..3 selecciona IMU, g gyro (todas), m mag (la seleccionada), M mag (todas a la vez), c borrar offsets,
 //         r reset filtros, a/b ejes 0x018/0x039, l/L captura CSV, d volcar de nuevo.
@@ -51,7 +51,7 @@ static const u32 NAV_BASES[4] = { 0x40000000u, 0x40010000u, 0x40020000u, 0x40030
 static u32 g_nav = 0x40000000u;         // nav_spi_ctrl de la IMU seleccionada
 #define NAV_BASE  (g_nav)
 #define MAD_BASE  0x40040000u           // mad_multi
-#define R2F_BASE  0x40050000u           // r2f_mux
+#define R2F_BASE  0x40050000u           // r2f_tid (raw2float)
 
 // ---- nav_spi_ctrl (nav_pkg.vhd) -------------------------------------------
 #define NAV_CTRL        0x00
@@ -61,6 +61,13 @@ static u32 g_nav = 0x40000000u;         // nav_spi_ctrl de la IMU seleccionada
 #define NAV_STATUS      0x40
 #define NAV_SAMPLE_CNT  0x44
 #define NAV_RAW0        0x50   // 9 palabras: gx gy gz ax ay az mx my mz (int16 extendido)
+// nav_spi_ctrl v2: instantanea atomica de la ultima trama enviada al nucleo
+#define NAV_SNAP_SEQ    0x74   // numero de trama (= SAMPLE_COUNT tras la trama)
+#define NAV_SNAP_TS_GDA 0x78   // ciclos de reloj (100 MHz) al detectar GDA
+#define NAV_SNAP_TS_END 0x7C   // ciclos de reloj al aceptarse la ultima palabra
+#define NAV_SNAP_W0     0x80   // 9 palabras enviadas al nucleo (con offsets/ejes): 0x80..0xA0
+#define NAV_STREAM_LAST 0xA4   // ciclos de la ultima trama en S_STREAM
+#define NAV_STREAM_MAX  0xA8   // maximo de ciclos en S_STREAM
 #define NAV_OFF_G       0x20   // sesgo gyro:  gx 0x20, gy 0x24, gz 0x28 (int16, se RESTA)
 #define NAV_OFF_M       0x2C   // hard-iron:   mx 0x2C, my 0x30, mz 0x34 (int16, se RESTA)
 #define NAV_AXIS_CFG    0x38   // orientacion de ejes (ver nav_spi_ctrl.vhd): [2:0] signos mag,
@@ -92,10 +99,10 @@ static u32 g_nav = 0x40000000u;         // nav_spi_ctrl de la IMU seleccionada
 
 // mad_multi: offsets fijados con #pragma HLS INTERFACE s_axilite ... offset=
 #define MAD_BETA      0x10
-#define MAD_DT        0x18
 #define MAD_RESET     0x20   // MASCARA: bit i = reiniciar la IMU i
 #define MAD_Q_OUT     0x40   // 16 palabras: IMU i -> q0..q3 en 0x40 + 16*i + 4*k
 #define MAD_FRAME_CNT 0x80   // 4 palabras: tramas procesadas por IMU
+#define MAD_DT_IMU    0x90   // 4 floats: dt (s) de cada IMU
 
 // Rango del giroscopio: 0=245dps 1=500dps 2/3=2000dps.
 // Debe ser el MISMO valor en nav_spi_ctrl (RANGE_CFG[1:0]) y en raw2float.
@@ -104,7 +111,11 @@ static u32 g_nav = 0x40000000u;         // nav_spi_ctrl de la IMU seleccionada
 // nav_spi_ctrl entrega una trama por cada dato nuevo del giroscopio/acelerometro
 // (ODR 119 Hz) y reutiliza la ultima muestra del magnetometro (ODR 80 Hz).
 // ODR_CFG: odr_g=3 (119 Hz), odr_xl=3 (119 Hz), odr_m=7 (80 Hz).
-#define DT_SECONDS    (1.0f / 119.0f)
+#define DT_SECONDS    (1.0f / 119.0f)   // valor nominal (solo para el ajuste offline de ejes)
+// Periodo REAL de muestreo de cada IMU (cada LSM9DS1 tiene su reloj; medido con el contador de ciclos
+// de nav_spi_ctrl en la Prueba4: 120,77 / 120,37 / 117,92 / 124,11 Hz). Re-medir con analyze_multi.py
+// si se cambian las placas, y poner aqui el 'hw_dt_ms' que imprime (en segundos).
+static const float DT_IMU[4] = { 8.280e-3f, 8.307e-3f, 8.480e-3f, 8.057e-3f };
 
 // beta alta al arrancar (convergencia rapida) y baja en regimen (menos ruido).
 #define BETA_START    1.0f
@@ -619,13 +630,16 @@ static void print_status(u32 st) {
 // ---------------------------------------------------------------------------
 // Una fila por trama de cualquier IMU (cada una muestrea por su cuenta a ~118 Hz).
 // Se vuelca al final como CSV por la UART (~125 s para 4 IMUs y 30 s).
-#define LOG_SECONDS 30
+#define LOG_SECONDS 90
 #define LOG_MAX     (4 * LOG_SECONDS * 120 + 64)
 typedef struct {
     u32     cnt;        // SAMPLE_COUNT de nav_spi_ctrl de esa IMU
     u32     fc;         // frame_cnt del nucleo para esa IMU (tramas ya procesadas)
     u32     t_us;       // microsegundos desde la primera fila
-    int32_t raw[9];     // gx gy gz ax ay az mx my mz (crudos, antes de offset/ejes)
+    int32_t raw[9];     // gx gy gz ax ay az mx my mz: palabras ENVIADAS al nucleo (tras offset/ejes), instantanea v2
+    u32     ts_gda;     // ciclos (100 MHz) al detectar GDA (contador libre de 32 bits)
+    u32     ts_end;     // ciclos al aceptarse la ultima palabra de la trama
+    u32     str_cyc;    // ciclos de la trama en S_STREAM
     u32     q[4];       // q de esa IMU (bits de float)
     u8      imu;
     u8      ok;         // 1 si ni SAMPLE_COUNT ni frame_cnt cambiaron durante la lectura
@@ -636,9 +650,9 @@ static int      g_log_beta_row = -1;       // fila en la que se cambio beta de a
 static u32      g_log_cnt0[4];
 
 static void log_dump(void) {
-    printf("\r\n#HDR,fs_g=%u,dt_hz=119,beta_start=1.0,beta_run=0.1,beta_start_ms=%d,nimu=%d,n=%d,"
-           "beta_row=%d,gt_hz=%lu\r\n",
-           (unsigned)FS_G_SELECTED, (int)BETA_START_MS, N_IMU, g_log_n, g_log_beta_row, (unsigned long)g_gt_hz);
+    printf("\r\n#HDR,fs_g=%u,dt_us=%d/%d/%d/%d,beta_start=1.0,beta_run=0.1,beta_start_ms=%d,nimu=%d,n=%d,"
+           "beta_row=%d,gt_hz=%lu,snap=1\r\n",
+           (unsigned)FS_G_SELECTED, (int)(DT_IMU[0]*1e6f+0.5f), (int)(DT_IMU[1]*1e6f+0.5f), (int)(DT_IMU[2]*1e6f+0.5f), (int)(DT_IMU[3]*1e6f+0.5f), (int)BETA_START_MS, N_IMU, g_log_n, g_log_beta_row, (unsigned long)g_gt_hz);
     for (int i = 0; i < N_IMU; i++) {
         const u32 b = NAV_BASES[i];
         printf("#IMU,%d,axis_cfg=0x%03lx,goff=%ld/%ld/%ld,moff=%ld/%ld/%ld,cnt0=%lu\r\n", i,
@@ -647,13 +661,13 @@ static void log_dump(void) {
                (long)(int32_t)rd(b, NAV_OFF_M + 0), (long)(int32_t)rd(b, NAV_OFF_M + 4), (long)(int32_t)rd(b, NAV_OFF_M + 8),
                (unsigned long)g_log_cnt0[i]);
     }
-    printf("#COLS,imu,cnt,fc,t_us,gx,gy,gz,ax,ay,az,mx,my,mz,q0,q1,q2,q3,ok  (q en hex de float32)\r\n");
+    printf("#COLS,imu,cnt,fc,t_us,gx,gy,gz,ax,ay,az,mx,my,mz,q0,q1,q2,q3,ok,ts_gda,ts_end,str_cyc  (gx..mz = palabras enviadas al nucleo; q en hex de float32; ts en ciclos de 100 MHz)\r\n");
     for (int i = 0; i < g_log_n; i++) {
         const logrec_t *r = &g_log[i];
         printf("%u,%lu,%lu,%lu", (unsigned)r->imu, (unsigned long)r->cnt, (unsigned long)r->fc, (unsigned long)r->t_us);
         for (int k = 0; k < 9; k++) printf(",%ld", (long)r->raw[k]);
         for (int k = 0; k < 4; k++) printf(",%08lx", (unsigned long)r->q[k]);
-        printf(",%u\r\n", (unsigned)r->ok);
+        printf(",%u,%lu,%lu,%lu\r\n", (unsigned)r->ok, (unsigned long)r->ts_gda, (unsigned long)r->ts_end, (unsigned long)r->str_cyc);
     }
     printf("#END\r\n");
 }
@@ -675,8 +689,6 @@ static void log_capture(int do_reset, int *beta_low) {
     u32 last[4];
     for (int i = 0; i < N_IMU; i++) { last[i] = rd(NAV_BASES[i], NAV_SAMPLE_CNT); g_log_cnt0[i] = last[i]; }
     const float gs = (FS_G_SELECTED == 0 ? 8.75e-3f : (FS_G_SELECTED == 1 ? 17.5e-3f : 70.0e-3f));
-    float go[3];
-    for (int k = 0; k < 3; k++) go[k] = (float)(int16_t)rd(NAV_BASES[0], NAV_OFF_G + 4 * k);
     uint64_t t0 = 0;
     float ws = 0.0f; int moving = 0, ready = 0, first = 1; u32 still_since = 0;
     int n = 0; g_log_beta_row = -1;
@@ -686,23 +698,33 @@ static void log_capture(int do_reset, int *beta_low) {
         for (int i = 0; i < N_IMU; i++) {
             const u32 b = NAV_BASES[i];
             if (rd(b, NAV_SAMPLE_CNT) == last[i]) continue;
-            usleep(500);                           // da tiempo al mux y al nucleo
             logrec_t *r = &g_log[n];
-            u32 c1 = rd(b, NAV_SAMPLE_CNT);
-            for (int k = 0; k < 9; k++) r->raw[k] = (int32_t)rd(b, NAV_RAW0 + 4 * k);
+            // Instantanea atomica de la trama (nav_spi_ctrl v2): se lee SEQ antes y despues;
+            // si cambia entre medias se repite la lectura (solo una trama cada ~8 ms).
+            u32 s1, s2, tg, te, sl; int32_t wv[9];
+            int tries = 0;
+            do {
+                s1 = rd(b, NAV_SNAP_SEQ);
+                tg = rd(b, NAV_SNAP_TS_GDA); te = rd(b, NAV_SNAP_TS_END); sl = rd(b, NAV_STREAM_LAST);
+                for (int k = 0; k < 9; k++) wv[k] = (int32_t)rd(b, NAV_SNAP_W0 + 4 * k);
+                s2 = rd(b, NAV_SNAP_SEQ);
+            } while (s1 != s2 && ++tries < 3);
+            // espera (sin dormir) a que el nucleo haya procesado esa trama
+            { int wc = 0; while (rd(MAD_BASE, MAD_FRAME_CNT + 4 * i) < s1 && ++wc < 400) ; }
             float qq[4]; u32 fc;
             int coh = read_q(i, qq, &fc);
             for (int k = 0; k < 4; k++) r->q[k] = f2u(qq[k]);
-            u32 c2 = rd(b, NAV_SAMPLE_CNT);
-            r->cnt = c1; r->fc = fc; r->imu = (u8)i;
-            r->ok = (c1 == c2 && coh) ? 1u : 0u;
-            last[i] = c1;                          // si llegaron 2 tramas seguidas se vera como hueco en cnt
+            for (int k = 0; k < 9; k++) r->raw[k] = wv[k];
+            r->ts_gda = tg; r->ts_end = te; r->str_cyc = sl;
+            r->cnt = s1; r->fc = fc; r->imu = (u8)i;
+            r->ok = (s1 == s2 && fc == s1 && coh) ? 1u : 0u;   // fc != s1: el nucleo ya iba por otra trama
+            last[i] = s1;                          // si llegaron 2 tramas seguidas se vera como hueco en cnt
             uint64_t tn = gt_now();
             if (n == 0) t0 = tn;
             r->t_us = (u32)(((tn - t0) * 1000000ull) / g_gt_hz);
             u32 t_ms = r->t_us / 1000u;
             if (i == 0) {                          // avisos: solo con la IMU 0
-                float gx = ((float)r->raw[0] - go[0]) * gs, gy = ((float)r->raw[1] - go[1]) * gs, gz = ((float)r->raw[2] - go[2]) * gs;
+                float gx = (float)r->raw[0] * gs, gy = (float)r->raw[1] * gs, gz = (float)r->raw[2] * gs;   // ya sin offset (instantanea v2)
                 ws += 0.1f * (sqrtf(gx * gx + gy * gy + gz * gz) - ws);
                 if (!moving && ws > MOVE_DPS_ON) { moving = 1; ready = 0; say_t("MOV", t_ms); }
                 else if (moving && ws < MOVE_DPS_OFF) { moving = 0; still_since = t_ms; say_t("QUIETO", t_ms); }
@@ -754,8 +776,8 @@ static void show_imu(int i) {
 //    (el hard-iron depende del montaje y del entorno, no del arranque: vale mientras no cambie).
 //    Tecla 'M' = calibrar los 4 a la vez (cuerpo rigido); 'm' = solo la IMU seleccionada.
 #define GYRO_AT_BOOT 1
-static const int32_t GYRO_PRESET[4][3] = { {188, 141, 16}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
-static const int32_t MAG_PRESET[4][3]  = { {-2107, 2132, -1331}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
+static const int32_t GYRO_PRESET[4][3] = {{25, 19, 64}, {131, 65, 38}, {180, 113, -30}, {-120, -63, 105}};
+static const int32_t MAG_PRESET[4][3]  = {{1552, 1064, -81}, {311, 2169, -21}, {-2188, 2152, -1273}, {1508, 1242, -1704}};
 
 int main(void) {
     printf("\r\n=== Madgwick en FPGA: %d IMUs, un solo nucleo ===\r\n", N_IMU);
@@ -764,18 +786,19 @@ int main(void) {
     // Orden: primero los bloques HLS (para que esten listos cuando llegue la primera
     // trama) y al final se habilitan los nav_spi_ctrl.
     // 1) Cada nav_spi_ctrl: ODR, rango y ejes (aun sin habilitar)
+    //    (Con el arbitro axis_rr_mux4 ya no hace falta habilitar los 4 nav: solo los N_IMU conectados.)
     for (int i = 0; i < N_IMU; i++) {
         const u32 b = NAV_BASES[i];
         wr(b, NAV_ODR_CFG, (7u << 6) | (3u << 3) | 3u);
         wr(b, NAV_RANGE_CFG, (0u << 2) | (FS_G_SELECTED & 0x3u));
         wr(b, NAV_AXIS_CFG, (AXIS_CFG_PRESET >= 0) ? (u32)AXIS_CFG_PRESET : (u32)AXIS_CFG_DEFAULT);
     }
-    // 2) r2f_mux: mismo rango de giroscopio; arranca en modo libre
+    // 2) r2f_tid: mismo rango de giroscopio; arranca en modo libre
     wr(R2F_BASE, R2F_FS_G_REG, FS_G_SELECTED & 0x3u);
     wr(R2F_BASE, HLS_AP_CTRL, AP_START | AP_AUTORESTART);
     // 3) Nucleo multi: beta, dt, reset de todas las IMUs y modo libre
     wr(MAD_BASE, MAD_BETA, f2u(BETA_START));
-    wr(MAD_BASE, MAD_DT, f2u(DT_SECONDS));
+    for (int i = 0; i < 4; i++) wr(MAD_BASE, MAD_DT_IMU + 4 * i, f2u(DT_IMU[i]));
     wr(MAD_BASE, MAD_RESET, IMU_MASK);
     wr(MAD_BASE, HLS_AP_CTRL, AP_START | AP_AUTORESTART);
 

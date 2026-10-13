@@ -15,5 +15,16 @@ Cabecera `#HDR` con ejes y offsets, una fila por trama. Se analizan con los scri
 
 Uso: `python ../analysis/analyze_poses.py captura_yaw_3.log --nominal 90,90,90,90,90,90,90,90 --gyro`
 
-Las capturas de `Integration_Zybo_multi` (varias IMUs) tienen otro formato (columna `imu`, cabecera `#IMU`) y se analizan con `analyze_multi.py`.
+## Capturas de `Integration_Zybo_multi` (varias IMUs, v0.4.0)
+
+Formato distinto: cabecera `#HDR` (con `dt_us` por IMU y `snap=1`), `#IMU` por IMU, y una fila por trama con `imu,cnt,fc,t_us,gx..mz,q0..q3 (hex float32),ok,ts_gda,ts_end,str_cyc`. Se analizan con `analyze_multi.py` (`--rigid` para la coherencia entre IMUs). Cuatro Pmod NAV rígidos, la de JA girada 90°; todas con el diseño de v0.4.0 (`dt` por IMU) y con el cable USB sobre las placas.
+
+| Fichero | Qué es |
+|---|---|
+| `multi_3vueltas.log` | 60 s, ≈ 2 950° (3 ejes, ≈ 3 vueltas por eje), pico 332 °/s. Es la más limpia en coherencia |
+| `multi_5500deg_60s.log` | 60 s, ≈ 5 500°, pico 538 °/s (5 muestras saturadas por IMU). Prueba de robustez |
+| `multi_5460deg_90s.log` | 90 s, ≈ 5 460°, pico 457 °/s, sin saturar |
+| `multi_reposo_16min.log` | ≈ 16 min en reposo/estado: **no** es un CSV, son líneas de estado de las 4 IMUs (`q`, ángulos, `fc`, `nav`, `err`) |
+
+Las capturas de la versión dual usan otro formato (ver arriba).
 Si un `.log` no aparece en `git status`, comprueba qué regla lo ignora: `git check-ignore -v data/captura.log`.
