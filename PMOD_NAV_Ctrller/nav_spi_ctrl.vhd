@@ -174,6 +174,29 @@ architecture rtl of nav_spi_ctrl is
     -- (evita enviar mag = 0 -> normalizacion 1/0 en Madgwick).
     signal mag_valid : std_logic := '0';
 
+    ---------------------------------------------------------------------
+    -- INSTANTANEA DE TRAMA (v2). Al aceptarse la ultima palabra de la trama
+    -- se copian, en el MISMO ciclo que sample_count++, las 9 palabras enteras
+    -- que se acaban de enviar al nucleo, el numero de trama y dos marcas de
+    -- tiempo. Asi el PS puede leer exactamente lo que vio el nucleo sin
+    -- carreras con la adquisicion siguiente (leer snap_seq antes y despues).
+    --   0x74 SNAP_SEQ      numero de trama (= sample_count tras la trama)
+    --   0x78 SNAP_TS_GDA   ciclos de reloj (contador libre) al detectar GDA
+    --   0x7C SNAP_TS_END   ciclos de reloj al aceptarse la ultima palabra
+    --   0x80..0xA0 SNAP_W0..W8  palabras enviadas (gx..mz, con offsets/ejes)
+    --   0xA4 STREAM_LAST   ciclos que estuvo la trama en S_STREAM (espera a tready incl.)
+    --   0xA8 STREAM_MAX    maximo de STREAM_LAST desde el reset
+    ---------------------------------------------------------------------
+    signal cyc          : unsigned(31 downto 0) := (others => '0');
+    signal ts_gda       : unsigned(31 downto 0) := (others => '0');
+    signal snap_seq     : unsigned(31 downto 0) := (others => '0');
+    signal snap_ts_gda  : unsigned(31 downto 0) := (others => '0');
+    signal snap_ts_end  : unsigned(31 downto 0) := (others => '0');
+    signal snap_w       : out_array_t := (others => (others => '0'));
+    signal str_cnt      : unsigned(31 downto 0) := (others => '0');
+    signal str_last     : unsigned(31 downto 0) := (others => '0');
+    signal str_max      : unsigned(31 downto 0) := (others => '0');
+
     -- AXIS_CFG (0x38): orientacion de ejes aplicada tras restar los offsets.
     --   [2:0]  signos del magnetometro (x,y,z), 1 = negar   (se aplican tras la permutacion)
     --   [5:3]  signos del giroscopio  (x,y,z), 1 = negar
@@ -331,6 +354,19 @@ begin
                         axi_rdata_r <= (31 downto 12 => '0') & axis_cfg;
                     when 16#48# =>   -- DEBUG: WHO_AM_I leido [7:0]=A/G [15:8]=Mag
                         axi_rdata_r <= (31 downto 16 => '0') & dbg_who_m & dbg_who_ag;
+                    when 16#74# =>   -- v2: numero de trama de la instantanea
+                        axi_rdata_r <= std_logic_vector(snap_seq);
+                    when 16#78# =>   -- v2: marca de tiempo (ciclos) al detectar GDA
+                        axi_rdata_r <= std_logic_vector(snap_ts_gda);
+                    when 16#7C# =>   -- v2: marca de tiempo (ciclos) al completar la trama
+                        axi_rdata_r <= std_logic_vector(snap_ts_end);
+                    when 16#80# | 16#84# | 16#88# | 16#8C# | 16#90# | 16#94# | 16#98# | 16#9C# | 16#A0# =>
+                        -- v2: palabras enviadas al nucleo (gx,gy,gz,ax,ay,az,mx,my,mz)
+                        axi_rdata_r <= snap_w((to_integer(unsigned(s_axi_araddr)) - 16#80#) / 4);
+                    when 16#A4# =>   -- v2: ciclos de la ultima trama en S_STREAM
+                        axi_rdata_r <= std_logic_vector(str_last);
+                    when 16#A8# =>   -- v2: maximo de ciclos en S_STREAM
+                        axi_rdata_r <= std_logic_vector(str_max);
                     when 16#50# | 16#54# | 16#58# | 16#5C# | 16#60# | 16#64# | 16#68# | 16#6C# | 16#70# =>
                         -- DEBUG: ultima muestra cruda (gx,gy,gz,ax,ay,az,mx,my,mz), signo extendido
                         axi_rdata_r <= std_logic_vector(resize(signed(
@@ -405,9 +441,19 @@ begin
             m_axis_tvalid <= '0';
             m_axis_tlast  <= '0';
             mag_valid     <= '0';
+            cyc           <= (others => '0');
+            ts_gda        <= (others => '0');
+            snap_seq      <= (others => '0');
+            snap_ts_gda   <= (others => '0');
+            snap_ts_end   <= (others => '0');
+            snap_w        <= (others => (others => '0'));
+            str_cnt       <= (others => '0');
+            str_last      <= (others => '0');
+            str_max       <= (others => '0');
 
         elsif rising_edge(clk) then
             spi_start <= '0';
+            cyc       <= cyc + 1;
 
             -- Limpieza de errores por software ---------------------------------
             if pulse_clr_err = '1' then
@@ -553,6 +599,7 @@ begin
                 when S_POLL_AG_WAIT =>
                     if spi_done = '1' then
                         if spi_rx0(1) = '1' then -- GDA: dato de giro (y accel, misma ODR) listo
+                            ts_gda      <= cyc;
                             poll_to_cnt <= (others => '0');
                             state <= S_BURST_G_GO;
                         else
@@ -679,6 +726,7 @@ begin
 
                 ---------------------------------------------------------
                 when S_STREAM =>
+                    str_cnt <= str_cnt + 1;   -- ciclos en S_STREAM (se pone a 0 al completar la trama)
                     -- Handshake AXI4-Stream correcto: tdata/tlast se actualizan
                     -- JUNTO con stream_idx y SOLO cuando se completa una
                     -- transferencia (tvalid='1' y tready='1'). Con tready fijo
@@ -699,6 +747,14 @@ begin
                             m_axis_tlast  <= '0';
                             sample_count  <= sample_count + 1;
                             state         <= S_POLL_AG_GO;
+                            -- instantanea atomica (mismo ciclo que sample_count++)
+                            snap_w        <= out_sample;
+                            snap_seq      <= sample_count + 1;
+                            snap_ts_gda   <= ts_gda;
+                            snap_ts_end   <= cyc;
+                            str_last      <= str_cnt + 1;
+                            if str_cnt + 1 > str_max then str_max <= str_cnt + 1; end if;
+                            str_cnt       <= (others => '0');
                         else
                             stream_idx   <= stream_idx + 1;
                             m_axis_tdata <= out_sample(stream_idx + 1);
