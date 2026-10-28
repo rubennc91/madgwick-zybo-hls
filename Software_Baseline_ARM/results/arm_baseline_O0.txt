@@ -1,0 +1,6 @@
+=== Madgwick en ARM, misma entrada que el nucleo: 12000 tramas, dt 8093.000 us (123.56 Hz), reloj de medida 333.335 MHz ===
+cache caliente n=11999  min 2.586  media 2.599  p50 2.598  p99 2.631  p99.9 2.694  max 4.089 us  (resta 0.087 us de timer)
+cache fria     n=2000  min 3.219  media 3.278  p50 3.249  p99 3.489  p99.9 3.525  max 3.546 us  (resta 0.087 us de timer)
+ARM float vs nucleo FPGA (t > 5.0 s): media 4.340e-04  max 2.802e-03 grados
+Carga de CPU a 123.6 Hz (1 IMU): media 0.0321 %  peor caso 0.0505 %  | 4 IMUs: media 0.128 %  peor caso 0.202 %
+(el filtro NO incluye la adquisicion SPI ni la salida: en el sistema de software esa parte es la que consume el tiempo)
