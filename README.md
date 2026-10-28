@@ -242,7 +242,8 @@ Registros de `nav_spi_ctrl` (base `0x40000000`): `0x00` CTRL, `0x04` ODR_CFG, `0
 * **v0.4.0**: diseño de 1 a 4 IMUs con un único núcleo verificado en placa (árbitro VHDL, `dt` por IMU, instantánea hardware): sin esperas en el stream, sin pérdida de muestras, error numérico ≤ 1,7e-4°, 16 minutos sin errores ni deriva. Con 4 IMUs: 7 199 LUT (40,9 %), 6 980 FF, 8 DSP, 3 RAMB36; timing cumplido (WNS +0,142 ns a 100 MHz).
 * v0.4.1: lectura de la temperatura del chip cada 128 tramas (sin afectar al flujo), modo de alto rendimiento del magnetómetro, ODR de 119 a 952 Hz con 4 IMUs (carga del núcleo de 1,4 % a 11,4 %, sin tramas perdidas) y captura cruda para análisis fuera de línea.
 * v0.5.0: línea base del filtro en el ARM (Software_Baseline_ARM): 0,82 µs por actualización con -O3 (0,010 % de una CPU por sensor a 119 Hz); la ventaja de la cadena en hardware no es la velocidad del filtro sino sacar al procesador de la adquisición. Calibración elipsoidal del magnetómetro (analysis/mag_ellipsoid.py).
-* Pendiente: calibración del magnetómetro de la IMU de JA (mayor residuo de coherencia); capturas sin cable y con referencia externa; comparación de extremo a extremo con adquisición en el ARM (v0.6.0).
+* v0.6.0: línea base de extremo a extremo (`Integration_Zybo_swspi`: el ARM adquiere por SPI, filtra y escribe por la UART). Con 2 IMU a 119 Hz ocupa el 1,7 % de la CPU, a 952 Hz el 11,2 % y pierde ≈ 55 % de las tramas con la UART a 115200; la cadena en la PL no usa CPU ni pierde tramas, con latencia propia mayor (135 µs frente a 71 µs a 119 Hz). Datos en `data/e2e/`.
+* Pendiente: calibración del magnetómetro de la IMU de JA (mayor residuo de coherencia); capturas sin cable y con referencia externa.
 
 ## Licencia
 MIT, ver `LICENSE`.

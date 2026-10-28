@@ -1,5 +1,38 @@
 # Cambios
 
+## v0.6.0 — línea base de extremo a extremo: adquisición y filtro en el ARM frente a la cadena en la PL
+
+**Hardware (`Integration_Zybo_swspi/`, nuevo)**
+- Diseño sin ninguna IP propia: Zynq PS + 2 × AXI Quad SPI (estándar, 2 esclavos: CS_AG = `ss[0]`, CS_M = `ss[1]`; SCK = 100 MHz / 32 = 3,125 MHz; modo SPI 3). Pmod NAV en JE (IMU 0) y JD (IMU 1). `create_project.tcl`, `build_project.tcl`, XDC y README.
+- `test/host_sim.*`: simulador en el PC para ejecutar `main.c` sin placa.
+
+**Software**
+- `Integration_Zybo_swspi/vitis_app/main.c`: el ARM hace todo (SPI por registros, calibración, conversión, Madgwick idéntico a `Software_Baseline_ARM/sw_baseline.c`, UART). Mide por IMU el tiempo de SPI, el del filtro, la latencia desde el dato nuevo (GDA) hasta el cuaternión, el intervalo entre tramas y las tramas perdidas. Macros `ODR_HZ` (119/952), `PRINT_10HZ`, `PHASE_SECONDS`, `PHASE_C_SECONDS`. Incluye un diagnóstico (`spi_diag`) que lee `SPISSR` para comprobar el número de esclavos.
+- `Integration_Zybo_multi/vitis_app/main_pl.c`: mismas fases y mismas tablas con la cadena en la PL; carga de CPU medida con un bucle de fondo idéntico en referencia, fase A y fase B, y una referencia final con la PL parada.
+
+**Datos**: `data/e2e/` (5 logs con su README).
+
+**Resultados** (2 IMU, medias; entre paréntesis el máximo)
+
+| | SW 119 | SW 952 | PL 119 | PL 952 |
+|---|---|---|---|---|
+| Tasa medida (Hz) | 120,8 / 121,7 | 965,8 / 974,1 | 120,7 / 121,8 | 965,8 / 974,6 |
+| Tramas perdidas | 0 | ≈ 55 % en la fase C (UART) | 0 | 0 |
+| SPI (µs) | 70,4 (78,6) | 56,6 (79,0) | — | — |
+| Filtro (µs) | 0,90 (1,49) | — | núcleo ≈ 29 µs | núcleo ≈ 29 µs |
+| Latencia dato→cuaternión (µs) | 71,3 (80,0) | 57,5 (80,5) | 135 (171) + núcleo | 109 (151) + núcleo |
+| Intervalo entre tramas (ms) | 8,20–8,37 | 0,97–1,13 | — | — |
+| CPU ocupada por la cadena | 1,7 % | 11,2 % | 0 % | 0 % |
+
+**Lectura**
+- En el ARM la latencia es menor (SPI a 3,125 MHz en sondeo; la PL adquiere a 2,5 MHz), pero la cadena ocupa la CPU y a 952 Hz la UART a 115200 le hace perder tramas. Sondeo, no interrupciones: con interrupciones la CPU quedaría libre en parte, no medido.
+- La cadena en la PL no consume CPU (cociente de la referencia final ≈ 1), no pierde tramas y no depende de la UART; el procesador queda libre para un sistema operativo o ROS (habilitado, no construido ni medido aquí).
+- La carga con 4 IMU en el ARM (≈ 22 %) es una extrapolación, no una medida.
+
+**Notas**
+- `main_pl.c` usa 333,333 MHz fijos para el temporizador (la calibración con `usleep` varía ≈ ±0,7 % entre arranques).
+- La fase C dura 5 s por el límite de 10 000 líneas de la consola de Vitis.
+
 ## v0.5.0 — temperatura, modo UHP, escalado de ODR, línea base ARM y calibración elipsoidal
 
 Recoge también el trabajo de «v0.4.1», que no llegó a publicarse.
