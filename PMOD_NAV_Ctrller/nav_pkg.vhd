@@ -32,6 +32,7 @@ package nav_pkg is
     constant REG_M_WHO_AM_I     : std_logic_vector(5 downto 0) := "001111"; -- 0x0F
     constant REG_M_CTRL_REG1_M  : std_logic_vector(5 downto 0) := "100000"; -- 0x20
     constant REG_M_CTRL_REG3_M  : std_logic_vector(5 downto 0) := "100010"; -- 0x22
+    constant REG_M_CTRL_REG4_M  : std_logic_vector(5 downto 0) := "100011"; -- 0x23
     constant REG_M_CTRL_REG5_M  : std_logic_vector(5 downto 0) := "100100"; -- 0x24
     constant REG_M_STATUS_REG_M : std_logic_vector(5 downto 0) := "100111"; -- 0x27
     constant REG_M_OUT_X_L_M    : std_logic_vector(5 downto 0) := "101000"; -- 0x28
@@ -60,17 +61,28 @@ package nav_pkg is
 
     type cfg_program_t is array (natural range <>) of cfg_op_t;
 
+    ---------------------------------------------------------------------
+    -- Modo de rendimiento del magnetometro (v0.5.0, experimento de ruido; los resultados del articulo con UHP usaron "11" y '1').
+    -- MAG_PERF: 00 = bajo consumo (valor por defecto del chip, comportamiento anterior),
+    --           01 = medio, 10 = alto, 11 = ultra alto. Se aplica a XY (CTRL_REG1_M.OM)
+    --           y a Z (CTRL_REG4_M.OMZ). MAG_TEMP_COMP: compensacion de temperatura (CTRL_REG1_M[7]).
+    -- Con "00" y '0' el sensor se configura exactamente como antes.
+    ---------------------------------------------------------------------
+    constant MAG_PERF      : std_logic_vector(1 downto 0) := "00";
+    constant MAG_TEMP_COMP : std_logic := '0';
+
     -- Programa de configuracion, en orden de ejecucion.
     -- Los pasos OP_WRITE_DYNAMIC toman el byte de datos de un registro
     -- AXI-Lite (ver nav_spi_ctrl.vhd, proceso de configuracion) en vez
     -- del campo "data" de esta tabla.
-    constant CFG_PROGRAM : cfg_program_t(0 to 5) := (
+    constant CFG_PROGRAM : cfg_program_t(0 to 6) := (
         0 => (OP_WRITE_DYNAMIC, CS_AG,  REG_AG_CTRL_REG1_G,  (others => '0')), -- ODR_G  + FS_G
         1 => (OP_WRITE_DYNAMIC, CS_AG,  REG_AG_CTRL_REG6_XL, (others => '0')), -- ODR_XL + FS_XL
         2 => (OP_WRITE_STATIC,  CS_AG,  REG_AG_CTRL_REG8,    x"44"),           -- BDU=1, IF_ADD_INC=1
         3 => (OP_WRITE_DYNAMIC, CS_MAG, REG_M_CTRL_REG1_M,   (others => '0')), -- ODR_M
         4 => (OP_WRITE_STATIC,  CS_MAG, REG_M_CTRL_REG3_M,   x"00"),           -- modo continuo
-        5 => (OP_WRITE_STATIC,  CS_MAG, REG_M_CTRL_REG5_M,   x"40")            -- BDU_M=1
+        5 => (OP_WRITE_STATIC,  CS_MAG, REG_M_CTRL_REG5_M,   x"40"),           -- BDU_M=1
+        6 => (OP_WRITE_STATIC,  CS_MAG, REG_M_CTRL_REG4_M,   "0000" & MAG_PERF & "00") -- OMZ (modo de Z)
     );
 
     ---------------------------------------------------------------------

@@ -34,7 +34,8 @@ entity nav_spi_ctrl is
         G_SPI_CLK_DIV    : integer := 40;     -- SCLK = clk / G_SPI_CLK_DIV (2.5 MHz @ 100 MHz; 10 MHz es el limite del LSM9DS1 y no deja margen con cable/Pmod)
         G_POR_WAIT_MS    : integer := 20;     -- espera de arranque del LSM9DS1
         G_POLL_TIMEOUT_MS: integer := 500;    -- umbral "no llega DRDY" -> ERR_OVERRUN (no fatal)
-        G_XFER_TIMEOUT_US: integer := 100     -- umbral "spi_engine no responde" -> ERR_SPI_TIMEOUT (fatal)
+        G_XFER_TIMEOUT_US: integer := 100;    -- umbral "spi_engine no responde" -> ERR_SPI_TIMEOUT (fatal)
+        G_TEMP_EVERY     : integer := 128     -- lee OUT_TEMP cada N tramas (0 = desactivado)
     );
     port (
         clk    : in std_logic;
@@ -138,6 +139,7 @@ architecture rtl of nav_spi_ctrl is
         S_POLL_AG_GO, S_POLL_AG_WAIT,
         S_BURST_G_GO, S_BURST_G_WAIT,
         S_BURST_XL_GO, S_BURST_XL_WAIT,
+        S_TEMP_GO, S_TEMP_WAIT,
         S_POLL_MAG_GO, S_POLL_MAG_WAIT,
         S_BURST_M_GO, S_BURST_M_WAIT,
         S_STREAM,
@@ -186,8 +188,13 @@ architecture rtl of nav_spi_ctrl is
     --   0x80..0xA0 SNAP_W0..W8  palabras enviadas (gx..mz, con offsets/ejes)
     --   0xA4 STREAM_LAST   ciclos que estuvo la trama en S_STREAM (espera a tready incl.)
     --   0xA8 STREAM_MAX    maximo de STREAM_LAST desde el reset
+    --   0xAC TEMP_RAW      OUT_TEMP del LSM9DS1 (int16 con signo extendido; T = 25 + raw/16 grados C)
+    --   0xB0 TEMP_COUNT    numero de lecturas de temperatura desde el reset
     ---------------------------------------------------------------------
     signal cyc          : unsigned(31 downto 0) := (others => '0');
+    signal temp_raw     : std_logic_vector(15 downto 0) := (others => '0');
+    signal temp_count   : unsigned(31 downto 0) := (others => '0');
+    signal temp_frames  : integer range 0 to 65535 := 0;
     signal ts_gda       : unsigned(31 downto 0) := (others => '0');
     signal snap_seq     : unsigned(31 downto 0) := (others => '0');
     signal snap_ts_gda  : unsigned(31 downto 0) := (others => '0');
@@ -371,6 +378,10 @@ begin
                         -- DEBUG: ultima muestra cruda (gx,gy,gz,ax,ay,az,mx,my,mz), signo extendido
                         axi_rdata_r <= std_logic_vector(resize(signed(
                             raw_sample((to_integer(unsigned(s_axi_araddr)) - 16#50#) / 4)), 32));
+                    when 16#AC# =>   -- TEMP_RAW (int16 con signo extendido)
+                        axi_rdata_r <= std_logic_vector(resize(signed(temp_raw), 32));
+                    when 16#B0# =>   -- TEMP_COUNT
+                        axi_rdata_r <= std_logic_vector(temp_count);
                     when others =>
                         axi_rdata_r <= (others => '0');
                 end case;
@@ -553,11 +564,11 @@ begin
                         spi_n_data    <= 1;
 
                         -- CTRL_REG1_G / CTRL_REG6_XL: [7:5]=ODR [4:3]=FS [2:0]=000 (reservado+BW)
-                        -- CTRL_REG1_M: [7]=0 [6:5]=OM=00 [4:2]=ODR_M [1:0]=00
+                        -- CTRL_REG1_M: [7]=TEMP_COMP [6:5]=OM [4:2]=ODR_M [1:0]=00 (ver MAG_PERF en nav_pkg)
                         case cfg_idx is
                             when 0 => cfg_byte := odr_g  & fs_g  & "000";
                             when 1 => cfg_byte := odr_xl & fs_xl & "000";
-                            when 3 => cfg_byte := '0' & "00" & odr_m & "00";
+                            when 3 => cfg_byte := MAG_TEMP_COMP & MAG_PERF & odr_m & "00";   -- TEMP_COMP, OM (XY), ODR_M
                             when others => cfg_byte := CFG_PROGRAM(cfg_idx).data;
                         end case;
                         spi_tx_data <= cfg_byte;
@@ -658,7 +669,35 @@ begin
                         raw_sample(3) <= spi_rx1 & spi_rx0; -- ax
                         raw_sample(4) <= spi_rx3 & spi_rx2; -- ay
                         raw_sample(5) <= spi_rx5 & spi_rx4; -- az
-                        state <= S_POLL_MAG_GO;
+                        if G_TEMP_EVERY > 0 and temp_frames >= G_TEMP_EVERY - 1 then
+                            temp_frames <= 0;
+                            state <= S_TEMP_GO;
+                        else
+                            if temp_frames < 65535 then temp_frames <= temp_frames + 1; end if;
+                            state <= S_POLL_MAG_GO;
+                        end if;
+                    elsif xfer_to_cnt = XFER_TO_CYCLES - 1 then
+                        st_err_timeout <= '1';
+                        state <= S_ERROR;
+                    else
+                        xfer_to_cnt <= xfer_to_cnt + 1;
+                    end if;
+
+                -- Lectura puntual de OUT_TEMP_L/H (0x15/0x16) cada G_TEMP_EVERY tramas.
+                -- Dura ~10 us y solo ocurre una vez por segundo: no afecta a la cadencia.
+                when S_TEMP_GO =>
+                    spi_cs_sel    <= CS_AG;
+                    spi_addr_byte <= SPI_RW_READ & SPI_MS_SINGLE & "010101";
+                    spi_n_data    <= 2;
+                    spi_start     <= '1';
+                    xfer_to_cnt   <= (others => '0');
+                    state         <= S_TEMP_WAIT;
+
+                when S_TEMP_WAIT =>
+                    if spi_done = '1' then
+                        temp_raw   <= spi_rx1 & spi_rx0;
+                        temp_count <= temp_count + 1;
+                        state      <= S_POLL_MAG_GO;
                     elsif xfer_to_cnt = XFER_TO_CYCLES - 1 then
                         st_err_timeout <= '1';
                         state <= S_ERROR;

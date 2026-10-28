@@ -25,8 +25,58 @@
 #elif defined(XPAR_XUARTPS_0_BASEADDR)
   #define CON_BASE XPAR_XUARTPS_0_BASEADDR
 #endif
+
 #ifdef CON_BASE
   #include "xuartps_hw.h"
+  // Respaldo por si la cabecera no define algo (offsets del UART del PS, UG585)
+  #ifndef XUartPs_ReadReg
+    #define XUartPs_ReadReg(base, off)       Xil_In32((base) + (off))
+    #define XUartPs_WriteReg(base, off, v)   Xil_Out32((base) + (off), (v))
+  #endif
+  #ifndef XUARTPS_CR_OFFSET
+    #define XUARTPS_CR_OFFSET      0x00u
+    #define XUARTPS_BAUDGEN_OFFSET 0x18u
+    #define XUARTPS_SR_OFFSET      0x2Cu
+    #define XUARTPS_FIFO_OFFSET    0x30u
+    #define XUARTPS_BAUDDIV_OFFSET 0x34u
+    #define XUARTPS_CR_RXRST       0x01u
+    #define XUARTPS_CR_TXRST       0x02u
+    #define XUARTPS_CR_RX_EN       0x04u
+    #define XUARTPS_CR_RX_DIS      0x08u
+    #define XUARTPS_CR_TX_EN       0x10u
+    #define XUARTPS_CR_TX_DIS      0x20u
+    #define XUARTPS_SR_RXEMPTY     0x02u
+    #define XUARTPS_SR_TXEMPTY     0x08u
+  #endif
+  #ifndef XUARTPS_SR_TXFULL
+    #define XUARTPS_SR_TXFULL      0x10u
+  #endif
+  #ifndef XUartPs_IsReceiveData
+    #define XUartPs_IsReceiveData(base) \
+      (!(XUartPs_ReadReg((base), XUARTPS_SR_OFFSET) & XUARTPS_SR_RXEMPTY))
+  #endif
+#endif
+
+#define UART_BAUD    921600u
+#define UART_REF_HZ  100000000u
+#ifdef CON_BASE
+__attribute__((unused)) static void uart_set_baud(u32 baud) {
+    u32 best_cd = 0, best_bd = 0, best_err = 0xFFFFFFFFu;
+    for (u32 bd = 4; bd <= 255; bd++) {
+        u32 cd = (UART_REF_HZ + (baud * (bd + 1)) / 2) / (baud * (bd + 1));
+        if (cd < 1 || cd > 65535) continue;
+        u32 real = UART_REF_HZ / (cd * (bd + 1));
+        u32 err = (real > baud) ? real - baud : baud - real;
+        if (err < best_err) { best_err = err; best_cd = cd; best_bd = bd; }
+    }
+    if (best_cd == 0) return;
+    while (!(XUartPs_ReadReg(CON_BASE, XUARTPS_SR_OFFSET) & XUARTPS_SR_TXEMPTY)) { }
+    XUartPs_WriteReg(CON_BASE, XUARTPS_CR_OFFSET, XUARTPS_CR_TX_DIS | XUARTPS_CR_RX_DIS);
+    XUartPs_WriteReg(CON_BASE, XUARTPS_BAUDGEN_OFFSET, best_cd);
+    XUartPs_WriteReg(CON_BASE, XUARTPS_BAUDDIV_OFFSET, best_bd);
+    XUartPs_WriteReg(CON_BASE, XUARTPS_CR_OFFSET,
+                     XUARTPS_CR_TXRST | XUARTPS_CR_RXRST | XUARTPS_CR_TX_EN | XUARTPS_CR_RX_EN);
+}
 #endif
 
 
@@ -68,6 +118,8 @@ static u32 g_nav = 0x40000000u;         // nav_spi_ctrl de la IMU seleccionada
 #define NAV_SNAP_W0     0x80   // 9 palabras enviadas al nucleo (con offsets/ejes): 0x80..0xA0
 #define NAV_STREAM_LAST 0xA4   // ciclos de la ultima trama en S_STREAM
 #define NAV_STREAM_MAX  0xA8   // maximo de ciclos en S_STREAM
+#define NAV_TEMP_RAW    0xAC   // OUT_TEMP del LSM9DS1 (int16 con signo; T = 25 + raw/16 C). Requiere el bitstream con G_TEMP_EVERY>0
+#define NAV_TEMP_COUNT  0xB0   // lecturas de temperatura desde el reset (si no avanza, el bitstream es el antiguo)
 #define NAV_OFF_G       0x20   // sesgo gyro:  gx 0x20, gy 0x24, gz 0x28 (int16, se RESTA)
 #define NAV_OFF_M       0x2C   // hard-iron:   mx 0x2C, my 0x30, mz 0x34 (int16, se RESTA)
 #define NAV_AXIS_CFG    0x38   // orientacion de ejes (ver nav_spi_ctrl.vhd): [2:0] signos mag,
@@ -115,7 +167,19 @@ static u32 g_nav = 0x40000000u;         // nav_spi_ctrl de la IMU seleccionada
 // Periodo REAL de muestreo de cada IMU (cada LSM9DS1 tiene su reloj; medido con el contador de ciclos
 // de nav_spi_ctrl en la Prueba4: 120,77 / 120,37 / 117,92 / 124,11 Hz). Re-medir con analyze_multi.py
 // si se cambian las placas, y poner aqui el 'hw_dt_ms' que imprime (en segundos).
-static const float DT_IMU[4] = { 8.280e-3f, 8.307e-3f, 8.480e-3f, 8.057e-3f };
+static const float DT_IMU[4] = { 8.280e-3f, 8.307e-3f, 8.480e-3f, 8.057e-3f };   // a ODR_CODE 3; se escalan con ODR_SCALE
+
+// Frecuencia de muestreo del acelerometro/giroscopio (ODR de los dos, mismo codigo en ODR_CFG):
+//   3 = 119 Hz   4 = 238 Hz   5 = 476 Hz   6 = 952 Hz   (el magnetometro sigue a 80 Hz y se reutiliza)
+// Con ODR_CODE != 3 usa MAG_PRESET (MAG_CAL_SECONDS 0): las teclas m/M asumen 119 Hz.
+#define ODR_CODE   3
+#define ODR_SCALE  (1 << (ODR_CODE - 3))                 // 1, 2, 4, 8
+#define ODR_HZ_MAX (126 * ODR_SCALE)                     // cota de la tasa real (nominal x 1,06) para dimensionar el log
+
+// dt que usa el nucleo para cada IMU. Arranca con DT_IMU / ODR_SCALE y, con DT_AUTO 1, se sustituye
+// por el periodo medido en el arranque (ciclos de reloj entre dos tramas, ver measure_dt).
+#define DT_AUTO 1
+static float g_dt[4];
 
 // beta alta al arrancar (convergencia rapida) y baja en regimen (menos ruido).
 #define BETA_START    1.0f
@@ -217,6 +281,35 @@ static void filter_reset(void) {
     wr(MAD_BASE, MAD_RESET, IMU_MASK);
     usleep(100000);                 // varias tramas con reset de cada IMU
     wr(MAD_BASE, MAD_RESET, 0);
+}
+
+// Par (SNAP_SEQ, SNAP_TS_GDA) coherente de nav_spi_ctrl v2 (se repite si llega una trama entre las lecturas).
+static void snap_pair(u32 b, u32 *seq, u32 *ts) {
+    u32 s1, s2, t;
+    do { s1 = rd(b, NAV_SNAP_SEQ); t = rd(b, NAV_SNAP_TS_GDA); s2 = rd(b, NAV_SNAP_SEQ); } while (s1 != s2);
+    *seq = s1; *ts = t;
+}
+
+// Mide el periodo real de muestreo de cada IMU: (ciclos de reloj a 100 MHz entre dos instantes de dato nuevo)
+// / (tramas entre ellos), y lo escribe en dt_imu del nucleo. Aritmetica modular de 32 bits: valido si la
+// ventana dura menos de 42 s. Con 3 s a 119 Hz son ~360 tramas (error << 0,01 %).
+static void measure_dt(int seconds) {
+    u32 s0[4], t0[4];
+    for (int i = 0; i < N_IMU; i++) snap_pair(NAV_BASES[i], &s0[i], &t0[i]);
+    usleep((u32)seconds * 1000000u);
+    for (int i = 0; i < N_IMU; i++) {
+        u32 s1, t1;
+        snap_pair(NAV_BASES[i], &s1, &t1);
+        u32 ds = s1 - s0[i], dc = t1 - t0[i];
+        if (ds >= 100u) {
+            g_dt[i] = (float)((double)dc / (double)ds * 1.0e-8);
+            wr(MAD_BASE, MAD_DT_IMU + 4 * i, f2u(g_dt[i]));
+            printf("IMU%d: periodo medido %.3f us -> %.2f Hz (%lu tramas en %d s)\r\n", i,
+                   (double)g_dt[i] * 1.0e6, 1.0 / (double)g_dt[i], (unsigned long)ds, seconds);
+        } else {
+            printf("IMU%d: pocas tramas (%lu) para medir dt; se mantiene %.3f us\r\n", i, (unsigned long)ds, (double)g_dt[i] * 1.0e6);
+        }
+    }
 }
 
 // q de la IMU i, leida de forma coherente con frame_cnt (cuenta antes y despues). Devuelve 1 si coherente.
@@ -630,8 +723,17 @@ static void print_status(u32 st) {
 // ---------------------------------------------------------------------------
 // Una fila por trama de cualquier IMU (cada una muestrea por su cuenta a ~118 Hz).
 // Se vuelca al final como CSV por la UART (~125 s para 4 IMUs y 30 s).
-#define LOG_SECONDS 90
-#define LOG_MAX     (4 * LOG_SECONDS * 120 + 64)
+// Las filas por captura se mantienen en ~40 000 (el volcado por UART a 115200 baud tarda ~115 filas/s):
+#if ODR_CODE == 3
+  #define LOG_SECONDS 70
+#elif ODR_CODE == 4
+  #define LOG_SECONDS 50
+#elif ODR_CODE == 5
+  #define LOG_SECONDS 40
+#else
+  #define LOG_SECONDS 30
+#endif
+#define LOG_MAX     (4 * LOG_SECONDS * ODR_HZ_MAX + 64)
 typedef struct {
     u32     cnt;        // SAMPLE_COUNT de nav_spi_ctrl de esa IMU
     u32     fc;         // frame_cnt del nucleo para esa IMU (tramas ya procesadas)
@@ -650,9 +752,9 @@ static int      g_log_beta_row = -1;       // fila en la que se cambio beta de a
 static u32      g_log_cnt0[4];
 
 static void log_dump(void) {
-    printf("\r\n#HDR,fs_g=%u,dt_us=%d/%d/%d/%d,beta_start=1.0,beta_run=0.1,beta_start_ms=%d,nimu=%d,n=%d,"
+    printf("\r\n#HDR,fs_g=%u,odr_hz=%d,dt_ns=%ld/%ld/%ld/%ld,beta_start=1.0,beta_run=0.1,beta_start_ms=%d,nimu=%d,n=%d,"
            "beta_row=%d,gt_hz=%lu,snap=1\r\n",
-           (unsigned)FS_G_SELECTED, (int)(DT_IMU[0]*1e6f+0.5f), (int)(DT_IMU[1]*1e6f+0.5f), (int)(DT_IMU[2]*1e6f+0.5f), (int)(DT_IMU[3]*1e6f+0.5f), (int)BETA_START_MS, N_IMU, g_log_n, g_log_beta_row, (unsigned long)g_gt_hz);
+           (unsigned)FS_G_SELECTED, 119 * ODR_SCALE, (long)(g_dt[0]*1e9f+0.5f), (long)(g_dt[1]*1e9f+0.5f), (long)(g_dt[2]*1e9f+0.5f), (long)(g_dt[3]*1e9f+0.5f), (int)BETA_START_MS, N_IMU, g_log_n, g_log_beta_row, (unsigned long)g_gt_hz);
     for (int i = 0; i < N_IMU; i++) {
         const u32 b = NAV_BASES[i];
         printf("#IMU,%d,axis_cfg=0x%03lx,goff=%ld/%ld/%ld,moff=%ld/%ld/%ld,cnt0=%lu\r\n", i,
@@ -725,7 +827,7 @@ static void log_capture(int do_reset, int *beta_low) {
             u32 t_ms = r->t_us / 1000u;
             if (i == 0) {                          // avisos: solo con la IMU 0
                 float gx = (float)r->raw[0] * gs, gy = (float)r->raw[1] * gs, gz = (float)r->raw[2] * gs;   // ya sin offset (instantanea v2)
-                ws += 0.1f * (sqrtf(gx * gx + gy * gy + gz * gz) - ws);
+                ws += (0.1f / (float)ODR_SCALE) * (sqrtf(gx * gx + gy * gy + gz * gz) - ws);
                 if (!moving && ws > MOVE_DPS_ON) { moving = 1; ready = 0; say_t("MOV", t_ms); }
                 else if (moving && ws < MOVE_DPS_OFF) { moving = 0; still_since = t_ms; say_t("QUIETO", t_ms); }
                 if (!moving && !ready && (t_ms - still_since) >= (first ? HOLD_FIRST_MS : HOLD_POSE_MS)) {
@@ -764,9 +866,113 @@ static void show_imu(int i) {
     for (int k = 0; k < 4; k++) { print_f4(q[k]); printf(k < 3 ? " " : ""); }
     printf("] |q|^2="); print_f4(n2);
     printf(" r="); print_f1(roll); printf(" p="); print_f1(pitch); printf(" y="); print_f1(yaw);
+    {   // temperatura del LSM9DS1 (se refresca ~1 s). tn = lecturas hechas; si tn=0 el bitstream es el antiguo
+        const int32_t traw = (int32_t)rd(NAV_BASES[i], NAV_TEMP_RAW);
+        const u32 tn = rd(NAV_BASES[i], NAV_TEMP_COUNT);
+        printf(" T="); if (tn) print_f1(25.0f + (float)traw / 16.0f); else printf("--");
+        printf("C(n=%lu)", (unsigned long)tn);
+    }
     printf(" fc=%lu nav=%lu err=%d\r\n", (unsigned long)fc, (unsigned long)rd(NAV_BASES[i], NAV_SAMPLE_CNT),
            !!(rd(NAV_BASES[i], NAV_STATUS) & ST_ERROR));
 }
+
+
+// ---- Modo streaming binario (tecla 's'): una trama por muestra (decimada a ~120 Hz) -------------
+// Trama: A5 5A | n(1) | seq(4 LE) | t_us(4 LE) | n * 4 float32 LE (q0 q1 q2 q3) | crc8(poly 0x07, sobre n..q)
+// Se sale con cualquier tecla.  El visor (viewer_live.py) la lee por el puerto serie.
+#ifdef CON_BASE
+static void uart_putb(u8 b) {
+    while (XUartPs_ReadReg(CON_BASE, XUARTPS_SR_OFFSET) & XUARTPS_SR_TXFULL) { }
+    XUartPs_WriteReg(CON_BASE, XUARTPS_FIFO_OFFSET, b);
+}
+static u8 g_crc;
+static void crc_b(u8 b) {
+    g_crc ^= b;
+    for (int k = 0; k < 8; k++) g_crc = (u8)((g_crc & 0x80u) ? (((u32)g_crc << 1) ^ 0x07u) : ((u32)g_crc << 1));
+}
+static void put_c(u8 b) { crc_b(b); uart_putb(b); }
+static void put_u32(u32 v) { for (int k = 0; k < 4; k++) put_c((u8)(v >> (8 * k))); }
+static void stream_run(void) {
+    mad_set_beta(BETA_RUN);
+    while (XUartPs_IsReceiveData(CON_BASE)) (void)XUartPs_ReadReg(CON_BASE, XUARTPS_FIFO_OFFSET);
+    printf("\r\n#STREAM,n=%d,odr_hz=%d,fmt=A55A\r\n", N_IMU, 119 * ODR_SCALE);
+    u32 last = rd(MAD_BASE, MAD_FRAME_CNT), seq = 0, dec = 0;
+    const uint64_t t0 = gt_now();
+    while (!XUartPs_IsReceiveData(CON_BASE)) {
+        u32 c = rd(MAD_BASE, MAD_FRAME_CNT);
+        if (c == last) { usleep(200); continue; }
+        last = c;
+        if (++dec < (u32)ODR_SCALE) continue;          // decima a ~120 Hz
+        dec = 0;
+        float q[4][4];
+        for (int i = 0; i < N_IMU; i++) { u32 fc; int ok = read_q(i, q[i], &fc); if (!ok) read_q(i, q[i], &fc); }
+        u32 t_us = (u32)(((gt_now() - t0) * 1000000ull) / g_gt_hz);
+        uart_putb(0xA5); uart_putb(0x5A);
+        g_crc = 0;
+        put_c((u8)N_IMU); put_u32(seq++); put_u32(t_us);
+        for (int i = 0; i < N_IMU; i++) for (int k = 0; k < 4; k++) put_u32(f2u(q[i][k]));
+        uart_putb(g_crc);
+    }
+    while (XUartPs_IsReceiveData(CON_BASE)) (void)XUartPs_ReadReg(CON_BASE, XUARTPS_FIFO_OFFSET);
+    printf("\r\n#STREAM_END\r\n");
+}
+
+// ---- Modo streaming CRUDO (tecla 'w'): para repetir el filtro fuera de linea ---------------------
+// Un registro por trama de CADA IMU (sin decimar; exige ODR_SCALE == 1, es decir ODR_CODE 3):
+//   A5 5B | imu(1) | flags(1) | cnt(4) | t_us(4) | 9 x int32 (gx gy gz ax ay az mx my mz: palabras ENVIADAS al nucleo)
+//         | 4 x float32 (q de esa IMU en el nucleo) | crc8(poly 0x07, sobre imu..q)        = 65 bytes
+//   flags bit0 = 1 si la instantanea es coherente (SEQ igual antes/despues y el nucleo ya habia procesado esa trama)
+//   cnt = SAMPLE_COUNT de esa IMU: un salto en cnt es una trama que el PS no llego a leer.
+// Con 2 IMUs a 119 Hz son ~15 kB/s (el UART a 921600 baud admite ~92 kB/s). Cualquier tecla lo para.
+// Captura con capture_raw.py; vuelve a ejecutar el filtro con replay_variants.py.
+#if ODR_SCALE == 1
+static void stream_raw_run(void) {
+    filter_reset();                                    // arranca desde el estado inicial conocido (beta alta durante BETA_START_MS)
+    while (XUartPs_IsReceiveData(CON_BASE)) (void)XUartPs_ReadReg(CON_BASE, XUARTPS_FIFO_OFFSET);
+    printf("\r\n#RAW,fmt=A55C,n=%d,odr_hz=%d,fs_g=%u,dt_ns=%ld/%ld/%ld/%ld,beta_start=1.0,beta_run=0.1,beta_start_ms=%d,gt_hz=%lu\r\n",
+           N_IMU, 119 * ODR_SCALE, (unsigned)FS_G_SELECTED,
+           (long)(g_dt[0]*1e9f+0.5f), (long)(g_dt[1]*1e9f+0.5f), (long)(g_dt[2]*1e9f+0.5f), (long)(g_dt[3]*1e9f+0.5f),
+           (int)BETA_START_MS, (unsigned long)g_gt_hz);
+    u32 last[4];
+    for (int i = 0; i < N_IMU; i++) last[i] = rd(NAV_BASES[i], NAV_SAMPLE_CNT);
+    const uint64_t t0 = gt_now();
+    int beta_low = 0;
+    while (!XUartPs_IsReceiveData(CON_BASE)) {
+        int got = 0;
+        for (int i = 0; i < N_IMU; i++) {
+            const u32 b = NAV_BASES[i];
+            if (rd(b, NAV_SAMPLE_CNT) == last[i]) continue;
+            u32 s1, s2; int32_t wv[9]; int tries = 0;
+            do {                                       // instantanea atomica (igual que log_capture)
+                s1 = rd(b, NAV_SNAP_SEQ);
+                for (int k = 0; k < 9; k++) wv[k] = (int32_t)rd(b, NAV_SNAP_W0 + 4 * k);
+                s2 = rd(b, NAV_SNAP_SEQ);
+            } while (s1 != s2 && ++tries < 3);
+            { int wc = 0; while (rd(MAD_BASE, MAD_FRAME_CNT + 4 * i) < s1 && ++wc < 400) ; }
+            float qq[4]; u32 fc;
+            int coh = read_q(i, qq, &fc);
+            const u32 t_us = (u32)(((gt_now() - t0) * 1000000ull) / g_gt_hz);
+            if (!beta_low && t_us >= (u32)BETA_START_MS * 1000u) { mad_set_beta(BETA_RUN); beta_low = 1; }
+            const u8 flags = (s1 == s2 && fc == s1 && coh) ? 1u : 0u;
+            last[i] = s1;
+            const u32 traw = rd(b, NAV_TEMP_RAW);            // se lee fuera del bucle atomico: varia cada ~1 s
+            uart_putb(0xA5); uart_putb(0x5C);
+            g_crc = 0;
+            put_c((u8)i); put_c(flags); put_u32(s1); put_u32(t_us);
+            for (int k = 0; k < 9; k++) put_u32((u32)wv[k]);
+            for (int k = 0; k < 4; k++) put_u32(f2u(qq[k]));
+            put_c((u8)(traw & 0xFF)); put_c((u8)((traw >> 8) & 0xFF));   // int16 little-endian
+            uart_putb(g_crc);
+            got = 1;
+        }
+        if (!got) usleep(100);
+    }
+    while (XUartPs_IsReceiveData(CON_BASE)) (void)XUartPs_ReadReg(CON_BASE, XUARTPS_FIFO_OFFSET);
+    mad_set_beta(BETA_RUN);
+    printf("\r\n#STREAM_END\r\n");
+}
+#endif
+#endif
 
 // Calibracion al arrancar:
 //  * GYRO_AT_BOOT = 1: mide el sesgo del giroscopio de cada IMU con todo QUIETO (unos 3 s por IMU).
@@ -777,9 +983,12 @@ static void show_imu(int i) {
 //    Tecla 'M' = calibrar los 4 a la vez (cuerpo rigido); 'm' = solo la IMU seleccionada.
 #define GYRO_AT_BOOT 1
 static const int32_t GYRO_PRESET[4][3] = {{25, 19, 64}, {131, 65, 38}, {180, 113, -30}, {-120, -63, 105}};
-static const int32_t MAG_PRESET[4][3]  = {{1552, 1064, -81}, {311, 2169, -21}, {-2188, 2152, -1273}, {1508, 1242, -1704}};
+static const int32_t MAG_PRESET[4][3]  = {{1537, 1372, -2025}, {-1952, 2124, -1233}, {-2188, 2152, -1273}, {1508, 1242, -1704}};   // IMU0 e IMU1 recalibradas sueltas (tecla m); IMU2/IMU3 sin recalibrar
 
 int main(void) {
+#if defined(CON_BASE) && (UART_BAUD != 115200u)
+    uart_set_baud(UART_BAUD);
+#endif
     printf("\r\n=== Madgwick en FPGA: %d IMUs, un solo nucleo ===\r\n", N_IMU);
     gt_init();
 
@@ -789,7 +998,7 @@ int main(void) {
     //    (Con el arbitro axis_rr_mux4 ya no hace falta habilitar los 4 nav: solo los N_IMU conectados.)
     for (int i = 0; i < N_IMU; i++) {
         const u32 b = NAV_BASES[i];
-        wr(b, NAV_ODR_CFG, (7u << 6) | (3u << 3) | 3u);
+        wr(b, NAV_ODR_CFG, (7u << 6) | ((u32)ODR_CODE << 3) | (u32)ODR_CODE);
         wr(b, NAV_RANGE_CFG, (0u << 2) | (FS_G_SELECTED & 0x3u));
         wr(b, NAV_AXIS_CFG, (AXIS_CFG_PRESET >= 0) ? (u32)AXIS_CFG_PRESET : (u32)AXIS_CFG_DEFAULT);
     }
@@ -798,7 +1007,7 @@ int main(void) {
     wr(R2F_BASE, HLS_AP_CTRL, AP_START | AP_AUTORESTART);
     // 3) Nucleo multi: beta, dt, reset de todas las IMUs y modo libre
     wr(MAD_BASE, MAD_BETA, f2u(BETA_START));
-    for (int i = 0; i < 4; i++) wr(MAD_BASE, MAD_DT_IMU + 4 * i, f2u(DT_IMU[i]));
+    for (int i = 0; i < 4; i++) { g_dt[i] = DT_IMU[i] / (float)ODR_SCALE; wr(MAD_BASE, MAD_DT_IMU + 4 * i, f2u(g_dt[i])); }
     wr(MAD_BASE, MAD_RESET, IMU_MASK);
     wr(MAD_BASE, HLS_AP_CTRL, AP_START | AP_AUTORESTART);
 
@@ -831,6 +1040,7 @@ int main(void) {
         if (!fc) bad = 1;
     }
     if (bad) return -2;
+    if (DT_AUTO) measure_dt(3);       // dt real de cada IMU (reloj de hardware); el nucleo sigue en reset
     wr(MAD_BASE, MAD_RESET, 0);
 
     // 6) Calibracion (ver GYRO_AT_BOOT / MAG_CAL_SECONDS): giroscopio de cada IMU y magnetometro
@@ -867,7 +1077,7 @@ int main(void) {
     u32 t_start_beta = 0;
     int beta_low = 0;
 
-    printf("Teclas: 0..3 selecciona IMU  g=gyro(todas, quietas)  m=mag(seleccionada)  M=mag(todas a la vez, cuerpo rigido)  c=borrar offsets  r=reset  a/b=ejes 0x018/0x039  l/L=captura CSV %d s (L reinicia antes)  d=volcar de nuevo\r\n", LOG_SECONDS);
+    printf("Teclas: 0..3 selecciona IMU  g=gyro(todas, quietas)  m=mag(seleccionada)  M=mag(todas a la vez, cuerpo rigido)  c=borrar offsets  r=reset  a/b=ejes 0x018/0x039  l/L=captura CSV %d s (L reinicia antes)  d=volcar de nuevo  s=streaming binario  w=streaming crudo para analisis fuera de linea (cualquier tecla lo para)\r\n", LOG_SECONDS);
     for (;;) {
 #ifdef CON_BASE
         while (XUartPs_IsReceiveData(CON_BASE)) {
@@ -889,6 +1099,10 @@ int main(void) {
             else if (ch == 'l') { log_capture(0, &beta_low); }
             else if (ch == 'L') { log_capture(1, &beta_low); t_start_beta = 0; }
             else if (ch == 'd') { log_dump(); }
+            else if (ch == 's') { stream_run(); }
+#if ODR_SCALE == 1
+            else if (ch == 'w') { stream_raw_run(); t_start_beta = 0; beta_low = 1; }
+#endif
             else if (ch == 'a' || ch == 'b') {
                 u32 cfg = (ch == 'a') ? 0x018u : 0x039u;
                 for (int i = 0; i < N_IMU; i++) wr(NAV_BASES[i], NAV_AXIS_CFG, cfg);
