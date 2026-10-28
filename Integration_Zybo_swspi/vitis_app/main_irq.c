@@ -11,7 +11,7 @@
  * ahora dentro de la rutina de interrupcion, y el dato puede esperar hasta un periodo del temporizador antes de leerse.
  *
  * Mide (por IMU, con el temporizador global): lectura SPI, filtro, deteccion->cuaternion (sin contar la espera al temporizador),
- * intervalo entre tramas y tramas perdidas (intervalo > 1,5 periodos); y (global): numero de interrupciones, duracion media y maxima
+ * intervalo entre tramas y tramas perdidas (entre interrupciones consecutivas con dato, > periodo + tick + 100 us); y (global): numero de interrupciones, duracion media y maxima
  * de la rutina, porcentaje de CPU en la rutina y CPU LIBRE = iteraciones del bucle de fondo / iteraciones de referencia sin interrupciones
  * (misma definicion que main_pl.c: 100 % = el procesador no pierde nada).
  * Fases: A sin salida, B una linea cada ~100 ms, C una linea por trama nueva de la IMU0 (la rutina sigue activa mientras se imprime).
@@ -226,12 +226,13 @@ static void st_add(stat_t *s, double v) { s->n++; s->sum += v; if (v > s->mx) s-
 typedef struct {
     float q[4]; volatile uint32_t seq;            /* seq impar = la rutina esta escribiendo q */
     int16_t m[3]; int16_t goff[3];
-    uint64_t t_start, t_prev; int have_prev;
+    uint64_t t_start, t_prev, tk_prev; int have_prev;
     stat_t spi, flt, lat, itv; uint64_t lost, frames, polls, sat;
     uint64_t busy_ticks;
 } imu_t;
 static imu_t G[4];
 static uint64_t tick_period;           /* periodo del temporizador en ciclos */
+static uint64_t tick_t0;               /* instante de entrada de la interrupcion en curso (criterio de tramas perdidas) */
 
 /* Procesa una IMU: devuelve 1 si habia dato nuevo. Se llama desde la rutina de interrupcion. */
 static int imu_step(int i) {
@@ -262,9 +263,12 @@ static int imu_step(int i) {
         const double per = DT_IMU[i] * 1e6;
         /* con un temporizador el dato se lee entre 0 y un periodo del temporizador despues de estar listo: el intervalo normal es < periodo + tick;
          * se cuenta perdida una trama si el intervalo supera periodo + tick + 100 us (una perdida real da ~2 periodos +- tick) */
-        if (itv > per + us(tick_period) + 100.0) s->lost += (uint64_t)(itv / per + 0.5) - 1;
+        /* el criterio usa el instante de ENTRADA de la interrupcion (multiplo exacto del tick), no el de lectura, para no contar el retardo
+         * de la rutina hasta llegar a cada sensor (hasta ~350 us con 4 IMU): normal <= periodo + tick; una perdida real da >= 2 periodos - tick */
+        const double itk = us(tick_t0 - s->tk_prev);
+        if (itk > per + us(tick_period) + 100.0) s->lost += (uint64_t)(itk / per + 0.5) - 1;
     }
-    s->t_prev = t0; s->have_prev = 1; s->frames++;
+    s->t_prev = t0; s->tk_prev = tick_t0; s->have_prev = 1; s->frames++;
     return 1;
 }
 
@@ -282,6 +286,7 @@ static volatile int irq_enabled;
 
 static void tick_work(void) {
     const uint64_t a = gt_now();
+    tick_t0 = a;
     for (int i = 0; i < N_IMU; i++) imu_step(i);
     const uint64_t d = gt_now() - a;
     isr_ticks++; isr_busy += d; if (d > isr_max) isr_max = d; if (d > tick_period) isr_over++;

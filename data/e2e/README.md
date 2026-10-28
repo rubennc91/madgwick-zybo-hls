@@ -31,4 +31,4 @@ En `sw4_O3_119.log` el temporizador se calibró con `usleep` (335,321 MHz en lug
 | `irq4_O3_119.log`, `irq4_O3_952.log` | `Integration_Zybo_swspi/vitis_app/main_irq.c` (`N_IMU 4`, `POLL_DIV 2`) | `zybo_swspi` con `NIMU 4` | 3,125 MHz | 119 / 952 Hz |
 
 Temporizador fijo a 333,333 MHz (no calibrado con `usleep`). Cada fase informa de la CPU en la rutina de interrupción y, en A y B, de la CPU libre medida con el bucle de fondo.
-El contador «perdidas» de estos logs da falsos positivos (el umbral no incluye el retardo de la rutina hasta llegar a cada sensor); la tasa en Hz coincide con la nominal, así que no hay pérdida real.
+Estos logs son de la v0.6.3: el criterio de tramas perdidas usa el instante de entrada de la interrupción y da 0 en todas las fases. Los de la v0.6.2 daban falsos positivos (hasta 58 en IMU3 a 952 Hz) porque contaban el retardo de la rutina hasta llegar a cada sensor; las tasas y tiempos son los mismos.

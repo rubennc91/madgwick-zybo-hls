@@ -1,5 +1,13 @@
 # Cambios
 
+## v0.6.3 — criterio de tramas perdidas corregido en la línea base con interrupciones; CHANGELOG de v0.3.0
+
+**Software**: `Integration_Zybo_swspi/vitis_app/main_irq.c` cuenta una trama perdida a partir del instante de entrada de la interrupción (múltiplo exacto del tick), no del instante de lectura. En la v0.6.2 el retardo de la rutina hasta llegar a cada sensor (hasta ≈ 350 µs con 4 IMU) daba falsos positivos. No cambia ningún tiempo medido.
+
+**Datos**: `data/e2e/irq4_O3_119.log` e `irq4_O3_952.log` se repiten con el firmware nuevo (4 IMU, `POLL_DIV 2`). Resultado: 0 tramas perdidas en las tres fases, en las cuatro IMU, a 119 y a 952 Hz; las tasas, la CPU en la rutina (4,2 % y 28,8 %) y la CPU libre (95,8 % y 71,1 %) coinciden con los de la v0.6.2.
+
+**Documentación**: la entrada «v0.3.0» de este fichero describía el primer diseño multi-IMU con `r2f_mux`, pero la etiqueta v0.3.0 corresponde al sistema dual (núcleo original y opt2 en la misma FPGA, captura CSV y análisis de error). Se corrige la entrada y el diseño multi-IMU con `r2f_mux` pasa a llamarse «primer diseño multi-IMU (anterior a v0.4.0, sin etiqueta)».
+
 ## v0.6.2 — línea base en el ARM con interrupciones
 
 **Software**: `Integration_Zybo_swspi/vitis_app/main_irq.c` (nuevo). Mismo diseño `zybo_swspi` (`NIMU 4`) y mismo Madgwick que `main.c`, pero la adquisición se hace en una rutina de interrupción del temporizador privado del Cortex-A9 (GIC, IRQ 29) y no por sondeo. El periodo del temporizador es la mitad del periodo más corto de los sensores (`POLL_DIV 2`: ≈ 4,03 ms a 119 Hz, ≈ 0,50 ms a 952 Hz). El programa principal ejecuta el mismo bucle de fondo que `main_pl.c`, de modo que la CPU libre se mide igual que en la cadena en la PL. Macros `N_IMU`, `ODR_HZ`, `POLL_DIV`, `PHASE_SECONDS`, `PHASE_C_SECONDS`.
@@ -135,5 +143,8 @@ Recoge también el trabajo de «v0.4.1», que no llegó a publicarse.
 - El `dt` por IMU está medido para las cuatro placas de las pruebas; hay que volver a medirlo si se cambian.
 - Pérdida de unas 11 filas de 43 000 en el enlace serie en la captura de 90 s (el filtro no pierde tramas).
 
-## v0.3.0
-Primera versión del diseño multi-IMU (4 Pmod NAV, un núcleo) con `r2f_mux` en HLS. Probada en C; limitaciones en el apartado «Por qué un árbitro en VHDL».
+## v0.3.0 — sistema dual: Madgwick original y opt2 en la misma FPGA
+Dos núcleos (original y opt2) alimentados con la misma trama, con captura CSV y análisis del error numérico: `Integration_Zybo_dual/` (diseño, `create_project.tcl`, `build_project.tcl`, `vitis_app/main.c`, XDC), `HLS_madgwick_stream_opt2/run_hls_madgwick_stream_opt2_ip2.tcl` y `analysis/` (`analyze_dual.py`, `replay.py`).
+
+## Primer diseño multi-IMU (anterior a v0.4.0, sin etiqueta)
+Diseño multi-IMU (4 Pmod NAV, un núcleo) con `r2f_mux` en HLS. Probado en C; limitaciones en el apartado «Por qué un árbitro en VHDL».
