@@ -1,5 +1,38 @@
 # Cambios
 
+## v0.5.0 — temperatura, modo UHP, escalado de ODR, línea base ARM y calibración elipsoidal
+
+Recoge también el trabajo de «v0.4.1», que no llegó a publicarse.
+
+**Hardware (`PMOD_NAV_Ctrller/`)**
+- `nav_spi_ctrl`: lectura de la temperatura del LSM9DS1 cada 128 tramas (≈ 1 s; dos bytes extra, ≈ 10 µs; no forma parte de la trama enviada al núcleo ni altera su cadencia). Registros `0xAC` TEMP_RAW (int16 con signo; T = 25 + raw/16 °C, solo variaciones fiables) y `0xB0` TEMP_COUNT. Generic `G_TEMP_EVERY` (0 = desactivado). **Hay que reempaquetar el IP (`package_nav_ip.tcl`) y regenerar el bitstream.**
+- `nav_pkg`: parámetros `MAG_PERF` (modo de rendimiento del magnetómetro: 00 bajo consumo … 11 ultra alto) y `MAG_TEMP_COMP`. Por defecto `"00"` y `'0'` (como en v0.4.0). Los resultados del artículo con UHP usaron `"11"` y `'1'`; reducen el ruido por muestra ≈ 30 % pero no la deriva lenta del rumbo.
+
+**Software (`Integration_Zybo_multi/vitis_app/main.c`)**
+- `ODR_CODE` (3…6 = 119, 238, 476, 952 Hz); `dt` por IMU medido al arrancar con el contador de ciclos y escrito en el núcleo.
+- Streaming binario `s` (visor en vivo) y streaming **crudo** `w` (`A5 5C`, 67 B por trama y por IMU: las 9 palabras enviadas al núcleo, su cuaternión y la temperatura) para repetir el filtro fuera de línea. UART a 921 600 baud.
+- `MAG_PRESET` actualizada: IMU0 e IMU1 recalibradas sueltas con `m`; las IMU2 e IMU3 conservan el valor anterior. Con `ODR_CODE != 3` hay que usar `MAG_PRESET` (`m`/`M` asumen 119 Hz). El modo `w` exige `ODR_CODE 3`.
+
+**Análisis (`analysis/`)**
+- `capture_raw.py`: captura del streaming crudo a CSV (con temperatura; acepta `A5 5B` y `A5 5C`).
+- `replay_variants.py`: reproduce el filtro fuera de línea (con y sin magnetómetro, otras ganancias) y analiza la temperatura.
+- `viewer_live.py` / `plot_drift.py`: visor en vivo de dos IMU (ángulo relativo, bisagra) y análisis de su CSV.
+- `mag_ellipsoid.py`: calibración del magnetómetro por elipsoide (hard-iron + soft-iron) con validación cruzada; solo fuera de línea (el firmware sigue aplicando únicamente el offset).
+
+**Línea base en software (`Software_Baseline_ARM/`)**
+- El filtro Madgwick en C en el Cortex-A9 con la misma entrada que el núcleo (12 000 tramas). Funciona en Vitis 2023.2 (flujo SDT) sin `xtime_l.h` ni `-lm`.
+
+**Resultados**
+- ARM (Release `-O3`): 0,82 µs por actualización de media (máx. 1,64 µs); Debug `-O0`: 2,60 µs. Carga de CPU a 123,6 Hz: 0,010 % por IMU. El núcleo de la FPGA tarda 29,4 µs (peor caso): la cadena no acelera el filtro, libera al procesador de la adquisición.
+- ARM frente al núcleo, mismas palabras: 4,3e-4° de media, 2,8e-3° de máximo.
+- Escalado de ODR (4 IMU, un núcleo): carga del núcleo del 1,4 % (119 Hz) al 11,4 % (952 Hz), 0 tramas perdidas, espera máxima en el árbitro 3,3 → 43 µs, diferencia con float32/float64 1,0e-4° → 6,4e-4°.
+- Temperatura: un escalón de 19 °C en una IMU cambia su sesgo de giroscopio 0,25 °/s y el ángulo relativo < 0,1°. La deriva lenta del rumbo relativo (σ ≈ 0,1–2° según el sitio) es ruido de baja frecuencia del magnetómetro de 1–2 mG, no depende de la temperatura ni del modo de rendimiento.
+
+**Notas**
+- `MAG_PRESET`: recalibrar cada IMU suelta con `m` (no `M`, que asume cuerpo rígido).
+- Los ensayos de un banco casero de ángulos relativos (rumbo con dos IMU) no son concluyentes (el cero varía 3,8–6,8° entre sesiones y el entorno magnético domina); se repetirán sobre una mesa óptica. No hay cambios de hardware aparte de los de `PMOD_NAV_Ctrller/`.
+
+
 ## v0.4.0 — 1 a 4 IMUs con un único núcleo, verificado en placa
 
 **Hardware**

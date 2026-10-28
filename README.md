@@ -27,6 +27,9 @@ PS (Zynq) solo por AXI-Lite: configuración, calibración y lectura de q por UAR
 | `HLS_madgwick_multi/` | **Un solo núcleo para varias IMUs**: `madgwick_multi` (opt2 con un estado `q` y un `dt` por IMU, identificadas por TID) y `r2f_tid` (raw2float que conserva el TID). Incluye banco de pruebas en C (`test_pc.sh`) |
 | `Integration_Zybo_multi/` | Integración de **1 a 4 Pmod NAV** (JE, JD, JC, JA) con un único núcleo Madgwick (proyecto `zybo_multi`). `axis_rr_mux4.vhd` es el árbitro round-robin de las 4 entradas; `report_multi.tcl` extrae timing, utilización y potencia |
 | `Integration_Zybo_dual/` | **Los dos núcleos a la vez** (original y opt2) alimentados con la misma trama por un `axis_broadcaster`; `main.c` compara sus cuaterniones y captura un CSV para el análisis offline |
+| `Software_Baseline_ARM/` | El mismo filtro Madgwick en el Cortex-A9 con la misma entrada que el núcleo: tiempo por actualización, diferencia numérica y carga de CPU (ver su README) |
+| `analysis/capture_raw.py`, `replay_variants.py`, `viewer_live.py`, `plot_drift.py`, `mag_ellipsoid.py` | Captura cruda por UART, reproducción del filtro fuera de línea (temperatura, magnetómetro), visor en vivo de 2 IMU y calibración elipsoidal del magnetómetro |
+
 
 ## Reproducir desde cero
 
@@ -185,6 +188,12 @@ Sistema completo (PS + 4 `nav_spi_ctrl` v2 + `axis_rr_mux4` + `r2f_tid` + `madgw
 * **Potencia estimada**: 1,568 W en total, de los cuales 1,400 W son el PS7; la lógica programable aporta unos 0,047 W dinámicos y 0,121 W estáticos. La confianza del informe es baja (sin actividad de simulación); úsala solo como orden de magnitud.
 * **Coste por IMU**: un `nav_spi_ctrl` (≈ 1 240 LUT / 1 081 FF) y 5 pines; el núcleo Madgwick, `r2f_tid` y el árbitro no crecen de forma apreciable. Las 4 `nav_spi_ctrl` ocupan el 69 % de las LUT del diseño.
 * **Coste de la instantánea (v2)**: cada `nav_spi_ctrl` pasó de ≈ 990 LUT / 613 FF (v0.3.0) a ≈ 1 240 LUT / 1 081 FF por los registros de instantánea y el contador de ciclos (+250 LUT, +468 FF por IMU). Es instrumentación para registrar y medir; un diseño sin ella sería más pequeño (no se ha sintetizado esa variante).
+* **Temperatura**: `nav_spi_ctrl` lee la del LSM9DS1 cada ≈ 1 s en `0xAC` (`TEMP_RAW`, T = 25 + raw/16 °C; solo valen las variaciones) y cuenta las lecturas en `0xB0`. Tras reempaquetar el IP comprueba que `0xB0` crece ≈ 1/s en cada IMU.
+* **Modo del magnetómetro**: `MAG_PERF` / `MAG_TEMP_COMP` en `nav_pkg.vhd` (por defecto bajo consumo, como antes). El modo ultra alto reduce el ruido por muestra ≈ 30 %; no cambia la deriva lenta del rumbo.
+* **ODR**: `ODR_CODE` en `main.c` (3 = 119 Hz, 4 = 238, 5 = 476, 6 = 952).
+* **Captura cruda** (`w` en la UART, `ODR_CODE 3`): `python analysis/capture_raw.py COM5 921600 captura_raw.csv --minutes 10`. Cada fila lleva las 9 palabras que recibió el núcleo, su cuaternión y la temperatura. `python analysis/replay_variants.py captura_raw.csv --png fig.png` repite el filtro en el PC (con y sin magnetómetro) y comprueba que coincide con el núcleo.
+* **Visor en vivo** (`s`): `python analysis/viewer_live.py --port COM5 --baud 921600` (teclas T tara, A eje de la bisagra, Q salir).
+* **Calibración elipsoidal**: con la IMU suelta, gira por todas las orientaciones durante 30–60 s en una captura cruda y ejecuta `python analysis/mag_ellipsoid.py captura_raw.csv --imu 1`. Da el offset (para `MAG_PRESET`) y la matriz soft-iron, con validación cruzada. La matriz todavía no se aplica en el firmware.
 
 ### Reproducir
 
