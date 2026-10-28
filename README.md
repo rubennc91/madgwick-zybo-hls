@@ -246,6 +246,7 @@ Registros de `nav_spi_ctrl` (base `0x40000000`): `0x00` CTRL, `0x04` ODR_CFG, `0
 * v0.6.1: la línea base de extremo a extremo con 4 IMU. En el ARM (SCK 3,125 MHz, sondeo) la cadena ocupa el 3,4 % de la CPU a 119 Hz y el 22,4 % a 952 Hz; la cadena en la PL deja la CPU libre al 100 % y no pierde tramas. Datos en `data/e2e/`.
 * v0.6.2: línea base en el ARM con interrupciones (`main_irq.c`, temporizador privado + GIC). Con 4 IMU deja libre el 95,8 % de la CPU a 119 Hz y el 71,1 % a 952 Hz (28,8 % ocupada), sin perder tramas con una línea por trama por la UART; la cadena en la PL sigue sin usar CPU. Datos en `data/e2e/`.
 * v0.6.3: criterio de tramas perdidas de `main_irq.c` corregido (0 tramas perdidas en todas las fases con 4 IMU a 119 y 952 Hz); la entrada de v0.3.0 del CHANGELOG ahora describe el sistema dual de la etiqueta.
+* v0.6.4: sensibilidad de la línea base con interrupciones a `POLL_DIV` (1, 2 y 4) con 4 IMU: `POLL_DIV 2` no pierde tramas a 119 ni a 952 Hz; con 1 faltan hasta el 1,8 % y con 4 la rutina desborda el tick en ≈ 1,1 % de las llamadas a 952 Hz. Datos en `data/e2e/`.
 * Pendiente: calibración del magnetómetro de la IMU de JA (mayor residuo de coherencia); capturas sin cable y con referencia externa.
 
 ## Licencia

@@ -32,3 +32,13 @@ En `sw4_O3_119.log` el temporizador se calibró con `usleep` (335,321 MHz en lug
 
 Temporizador fijo a 333,333 MHz (no calibrado con `usleep`). Cada fase informa de la CPU en la rutina de interrupción y, en A y B, de la CPU libre medida con el bucle de fondo.
 Estos logs son de la v0.6.3: el criterio de tramas perdidas usa el instante de entrada de la interrupción y da 0 en todas las fases. Los de la v0.6.2 daban falsos positivos (hasta 58 en IMU3 a 952 Hz) porque contaban el retardo de la rutina hasta llegar a cada sensor; las tasas y tiempos son los mismos.
+
+## Sensibilidad a `POLL_DIV` (v0.6.4)
+
+| Fichero | `POLL_DIV` | ODR |
+|---|---|---|
+| `irq4_O3_119_div1.log`, `irq4_O3_952_div1.log` | 1 (tick = periodo de la IMU más rápida) | 119 / 952 Hz |
+| `irq4_O3_119.log`, `irq4_O3_952.log` | 2 (v0.6.3) | 119 / 952 Hz |
+| `irq4_O3_119_div4.log`, `irq4_O3_952_div4.log` | 4 | 119 / 952 Hz |
+
+Mismo programa (`main_irq.c`), `N_IMU 4`, SCK 3,125 MHz. El contador «perdidas» no detecta las pérdidas con `POLL_DIV 1` (ver CHANGELOG): hay que comparar las tramas recibidas con las de `POLL_DIV 2`.

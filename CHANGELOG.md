@@ -1,5 +1,25 @@
 # Cambios
 
+## v0.6.4 — sensibilidad de la línea base con interrupciones al periodo del temporizador
+
+**Datos**: `data/e2e/irq4_O3_119_div1.log`, `irq4_O3_119_div4.log`, `irq4_O3_952_div1.log` e `irq4_O3_952_div4.log` (4 IMU, `main_irq.c` de la v0.6.3 con `POLL_DIV` 1 y 4; `POLL_DIV 2` son los `irq4_O3_119.log` e `irq4_O3_952.log`). No cambia ningún fichero de código.
+
+**Resultados** (4 IMU quietas, `-O3`, SCK 3,125 MHz)
+
+| ODR | `POLL_DIV` | Tick (µs) | CPU en la rutina | CPU libre | Rutina media / máx. (µs) | Rutina > tick | Tramas que faltan (peor IMU, fase A) |
+|---|---|---|---|---|---|---|---|
+| 119 Hz | 1 | 8057 | 3,79 % | 96,2 % | 305 / 353 | 0 | 0,75 % |
+| 119 Hz | 2 | 4029 | 4,19 % | 95,8 % | 169 / 353 | 0 | 0 |
+| 119 Hz | 4 | 2014 | 4,97 % | 95,0 % | 100 / 352 | 0 | 0 |
+| 952 Hz | 1 | 1007 | 25,5 % | 74,4 % | 257 / 350 | 0 | 1,84 % |
+| 952 Hz | 2 | 504 | 28,8 % | 71,1 % | 145 / 351 | 0 | 0 |
+| 952 Hz | 4 | 252 | 35,1 % | 64,8 % | 88 / 350 | ≈ 1,1 % de las llamadas | 0 |
+
+- «Tramas que faltan» compara las tramas recibidas con las de `POLL_DIV 2` en la misma fase (en la que las tasas coinciden con las nominales).
+- Con `POLL_DIV 1` el tick coincide con el periodo de la IMU más rápida y a veces dos muestras caen dentro de un mismo tick: a 119 Hz faltan 28 tramas de 3723 en la IMU3 (fase A); a 952 Hz faltan 156, 127 y 549 en las IMU1, 2 y 3 (0,5 %, 0,4 % y 1,8 %) y en la fase C 150 de 4967 en la IMU3 (3,0 %). El contador «perdidas» del firmware marca 0 en esos casos: con ese tick, su umbral (periodo + tick + 100 µs) queda en unos 2 periodos y no las detecta.
+- Con `POLL_DIV 4` a 952 Hz la rutina (máx. 350 µs) supera el tick (252 µs) en ≈ 1,1 % de las llamadas, sin perder tramas; es el límite del enfoque con temporizador.
+- `POLL_DIV 2` es el compromiso: sin tramas que falten en ninguna de las dos frecuencias y 71,1 % de CPU libre a 952 Hz.
+
 ## v0.6.3 — criterio de tramas perdidas corregido en la línea base con interrupciones; CHANGELOG de v0.3.0
 
 **Software**: `Integration_Zybo_swspi/vitis_app/main_irq.c` cuenta una trama perdida a partir del instante de entrada de la interrupción (múltiplo exacto del tick), no del instante de lectura. En la v0.6.2 el retardo de la rutina hasta llegar a cada sensor (hasta ≈ 350 µs con 4 IMU) daba falsos positivos. No cambia ningún tiempo medido.
