@@ -1,5 +1,25 @@
 # Cambios
 
+## v0.6.1 — línea base de extremo a extremo con 4 IMU
+
+**Datos**: `data/e2e/` incluye las medidas con 4 IMU en el ARM (`sw4_O3_*`) y en la PL (`pl4_*`), y las dos del ARM con SCK de 6,25 MHz (`*_sck625`).
+
+**Resultados** (4 IMU quietas, Release `-O3`; ARM con SCK 3,125 MHz)
+
+| | ARM 119 Hz | ARM 952 Hz | PL 119 Hz | PL 952 Hz |
+|---|---|---|---|---|
+| Tramas perdidas (sin UART / una línea cada 100 ms) | 0 | 0 | 0 | 0 |
+| Una línea por trama (UART 115200) | 0 | ≈ 54 % | 0 | 0 |
+| Latencia dato → cuaternión (µs, media) | 71,3 | 57,9 | 136 + núcleo | 109 + núcleo |
+| CPU ocupada por la cadena | 3,4 % | 22,4 % | 0 % | 0 % |
+
+- La carga de CPU del ARM con 4 IMU a 952 Hz es 22,4 %: coincide con la extrapolación de la v0.6.0 (≈ 22 %), que pasa a ser una medida.
+- Con el SCK al doble (6,25 MHz), la CPU baja a 3,4 % → 2,0 % (119 Hz) y 22,4 % → 13,8 % (952 Hz).
+- La PL no pierde tramas con 4 IMU y deja la CPU libre al 100 %. La espera máxima en el stream a 952 Hz es de 23–39 µs. En la fase de una línea por trama a 952 Hz, 10 de 2216 lecturas del cuaternión salieron no coherentes (0,45 %).
+
+**Notas**
+- `sw4_O3_119.log` usa la calibración del temporizador con `usleep` (335,321 MHz): las tasas salen ≈ 0,6 % altas.
+
 ## v0.6.0 — línea base de extremo a extremo: adquisición y filtro en el ARM frente a la cadena en la PL
 
 **Hardware (`Integration_Zybo_swspi/`, nuevo)**
