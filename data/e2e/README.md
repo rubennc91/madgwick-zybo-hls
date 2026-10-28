@@ -23,3 +23,12 @@ En el programa del ARM, a 952 Hz la UART (2,3 ms por línea) bloquea el bucle en
 
 Los `*_sck625.log` se conservan como medida de qué cambia al doblar el SCK; la cabecera del firmware imprime «SPI 3.125 MHz» (texto fijo), pero el reloj real era el doble: la lectura de una trama pasa de ≈ 70 µs a ≈ 43 µs a 119 Hz.
 En `sw4_O3_119.log` el temporizador se calibró con `usleep` (335,321 MHz en lugar de 333,333), así que las tasas en Hz salen ≈ 0,6 % altas (121,47 en lugar de 120,75 Hz en la IMU0); los tiempos en µs, ≈ 0,6 % bajos.
+
+## Con interrupciones (v0.6.2)
+
+| Fichero | Programa | Diseño | SCK | ODR |
+|---|---|---|---|---|
+| `irq4_O3_119.log`, `irq4_O3_952.log` | `Integration_Zybo_swspi/vitis_app/main_irq.c` (`N_IMU 4`, `POLL_DIV 2`) | `zybo_swspi` con `NIMU 4` | 3,125 MHz | 119 / 952 Hz |
+
+Temporizador fijo a 333,333 MHz (no calibrado con `usleep`). Cada fase informa de la CPU en la rutina de interrupción y, en A y B, de la CPU libre medida con el bucle de fondo.
+El contador «perdidas» de estos logs da falsos positivos (el umbral no incluye el retardo de la rutina hasta llegar a cada sensor); la tasa en Hz coincide con la nominal, así que no hay pérdida real.

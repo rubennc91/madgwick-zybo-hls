@@ -1,5 +1,26 @@
 # Cambios
 
+## v0.6.2 — línea base en el ARM con interrupciones
+
+**Software**: `Integration_Zybo_swspi/vitis_app/main_irq.c` (nuevo). Mismo diseño `zybo_swspi` (`NIMU 4`) y mismo Madgwick que `main.c`, pero la adquisición se hace en una rutina de interrupción del temporizador privado del Cortex-A9 (GIC, IRQ 29) y no por sondeo. El periodo del temporizador es la mitad del periodo más corto de los sensores (`POLL_DIV 2`: ≈ 4,03 ms a 119 Hz, ≈ 0,50 ms a 952 Hz). El programa principal ejecuta el mismo bucle de fondo que `main_pl.c`, de modo que la CPU libre se mide igual que en la cadena en la PL. Macros `N_IMU`, `ODR_HZ`, `POLL_DIV`, `PHASE_SECONDS`, `PHASE_C_SECONDS`.
+
+**Datos**: `data/e2e/irq4_O3_119.log` e `irq4_O3_952.log` (4 IMU quietas, Release `-O3`, SCK 3,125 MHz).
+
+**Resultados**
+
+| | ARM sondeo 119 Hz | ARM interrupciones 119 Hz | ARM sondeo 952 Hz | ARM interrupciones 952 Hz | PL |
+|---|---|---|---|---|---|
+| CPU ocupada por la cadena | 3,4 % | 4,2 % | 22,4 % | 28,8 % | 0 % |
+| CPU libre para otra tarea | 0 % | 95,8 % | 0 % | 71,1 % | 100 % |
+| Una línea por trama (UART 115200): tramas perdidas | 0 | 0 | ≈ 54 % | 0 (tasa medida = nominal) | 0 |
+| Latencia dato → cuaternión (µs) | 71,7 | 71,7 + espera ≤ 1 tick | 57,9 | 57,9 + espera ≤ 1 tick | 136 / 109 + núcleo |
+| Rutina de interrupción, media / máx. (µs) | | 168,9 / 352,5 | | 145,1 / 351,0 | |
+
+- La rutina nunca desborda el periodo del temporizador (0 desbordes en las 3 fases). Con la UART imprimiendo una línea por trama, el ARM con interrupciones no pierde tramas (la UART se atiende en el programa principal, con prioridad menor).
+- Coste frente a la PL: la CPU queda ocupada entre el 4 % y el 29 %, y cada dato espera hasta un tick antes de leerse; los intervalos entre tramas llegan a ≈ 1,5 periodos.
+- El contador «perdidas» marca falsos positivos (p. ej. 2 en IMU3 a 119 Hz y hasta 58 a 952 Hz): el umbral `periodo + tick + 100 µs` no incluye el retardo de la propia rutina (hasta ≈ 350 µs) hasta llegar a ese sensor. Las tasas medidas coinciden con las nominales (p. ej. 992,8 Hz en IMU3 a 952 Hz), así que no se pierde ninguna trama.
+- Es un temporizador, no una interrupción de dato listo (DRDY): el Pmod NAV lleva INT en el pin 7 del conector, que este diseño no conecta.
+
 ## v0.6.1 — línea base de extremo a extremo con 4 IMU
 
 **Datos**: `data/e2e/` incluye las medidas con 4 IMU en el ARM (`sw4_O3_*`) y en la PL (`pl4_*`), y las dos del ARM con SCK de 6,25 MHz (`*_sck625`).
