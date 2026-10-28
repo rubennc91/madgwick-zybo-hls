@@ -240,7 +240,9 @@ Registros de `nav_spi_ctrl` (base `0x40000000`): `0x00` CTRL, `0x04` ODR_CFG, `0
 * Versión opt2 verificada en placa: sin errores, |q|² = 1 en todas las lecturas, 119 Hz, giro de 360° completo sin saltos. La primera lectura tras el arranque muestra el estado inicial del filtro, q = (-1, 0, 0, 0,2), con |q|² = 1,04; es el valor de semilla del diseño, igual que en la versión original.
 * Sistema dual (original + opt2 con la misma entrada) verificado en placa: diferencias ≤ 1e-4° respecto a doble precisión y entre ellos, sin acumulación.
 * **v0.4.0**: diseño de 1 a 4 IMUs con un único núcleo verificado en placa (árbitro VHDL, `dt` por IMU, instantánea hardware): sin esperas en el stream, sin pérdida de muestras, error numérico ≤ 1,7e-4°, 16 minutos sin errores ni deriva. Con 4 IMUs: 7 199 LUT (40,9 %), 6 980 FF, 8 DSP, 3 RAMB36; timing cumplido (WNS +0,142 ns a 100 MHz).
-* Pendiente: calibración del magnetómetro de la IMU de JA (mayor residuo de coherencia); capturas sin cable y con referencia externa; frecuencia de muestreo mayor (ODR de 238–952 Hz en acelerómetro/giroscopio).
+* v0.4.1: lectura de la temperatura del chip cada 128 tramas (sin afectar al flujo), modo de alto rendimiento del magnetómetro, ODR de 119 a 952 Hz con 4 IMUs (carga del núcleo de 1,4 % a 11,4 %, sin tramas perdidas) y captura cruda para análisis fuera de línea.
+* v0.5.0: línea base del filtro en el ARM (Software_Baseline_ARM): 0,82 µs por actualización con -O3 (0,010 % de una CPU por sensor a 119 Hz); la ventaja de la cadena en hardware no es la velocidad del filtro sino sacar al procesador de la adquisición. Calibración elipsoidal del magnetómetro (analysis/mag_ellipsoid.py).
+* Pendiente: calibración del magnetómetro de la IMU de JA (mayor residuo de coherencia); capturas sin cable y con referencia externa; comparación de extremo a extremo con adquisición en el ARM (v0.6.0).
 
 ## Licencia
 MIT, ver `LICENSE`.
