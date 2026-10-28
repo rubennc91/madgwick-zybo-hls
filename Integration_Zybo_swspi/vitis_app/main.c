@@ -37,28 +37,50 @@
   }
 #endif
 
-#define N_IMU          2            /* IMUs conectadas (1..4) = NIMU del create_project.tcl */
+#define N_IMU          4            /* IMUs conectadas (1..4) = NIMU del create_project.tcl */
 #define QSPI_BASE(i)   (0x40000000u + 0x10000u * (uint32_t)(i))
 #ifndef PHASE_SECONDS
-#define PHASE_SECONDS  30           /* duracion de cada fase de medida */
+#define PHASE_SECONDS  30           /* duracion de las fases A y B */
+#endif
+#ifndef PHASE_C_SECONDS
+#define PHASE_C_SECONDS 5           /* duracion de la fase C (una linea por trama): corta para que la consola de Vitis (10 000 lineas) no recorte las tablas */
 #endif
 #define BETA_START     1.0f
 #define BETA_RUN       0.1f
 #define BETA_START_MS  3000
 #define FS_G_DPS_LSB   17.5e-3f     /* 500 dps */
-static const float DT_IMU[4] = { 8.280e-3f, 8.307e-3f, 8.480e-3f, 8.057e-3f };   /* periodos medidos en la cadena en hardware */
+/* ODR del giroscopio y del acelerometro: 119 Hz (ODR_HZ=119, como la cadena en hardware) o 952 Hz (ODR_HZ=952, maximo del LSM9DS1).
+ * Se elige con -DODR_HZ=952 o editando esta linea. El periodo real de cada chip es el medido en la cadena en hardware a 119 Hz; a 952 Hz es
+ * 1/8 de ese valor (mismo oscilador interno). */
+#ifndef ODR_HZ
+#define ODR_HZ         952
+#endif
+#if ODR_HZ == 952
+  #define ODR_CODE     6u
+  #define DT_DIV       8.0f
+#elif ODR_HZ == 119
+  #define ODR_CODE     3u
+  #define DT_DIV       1.0f
+#else
+  #error "ODR_HZ debe ser 119 o 952"
+#endif
+#define PRINT_10HZ     ((ODR_HZ + 5) / 10)    /* una linea cada ~100 ms: 12 tramas a 119 Hz, 95 a 952 Hz */
+static const float DT_IMU[4] = { 8.280e-3f / DT_DIV, 8.307e-3f / DT_DIV, 8.480e-3f / DT_DIV, 8.057e-3f / DT_DIV };   /* periodos medidos en la cadena en hardware */
 static const int32_t MAG_PRESET[4][3] = {{1537, 1372, -2025}, {-1952, 2124, -1233}, {-2188, 2152, -1273}, {1508, 1242, -1704}};
-#define GYRO_BIAS_FRAMES 240        /* ~2 s por IMU con la placa quieta */
+#define GYRO_BIAS_FRAMES (2 * ODR_HZ)        /* ~2 s por IMU con la placa quieta */
 
 /* Sin libm: el enlazador de Vitis 2023.2 (flujo SDT) no anade -lm. En el ARM la raiz sale de la instruccion VSQRT (la FPU del A9). */
 #ifdef HOST
   #define SQRTF(x) sqrtf(x)
   #define SQRTD(x) sqrt(x)
-#else
+#elif defined(__arm__)
   static inline float sqrtf_hw(float x) { float r; __asm__("vsqrt.f32 %0, %1" : "=t"(r) : "t"(x)); return r; }
   static inline double sqrtd_hw(double x) { double r; __asm__("vsqrt.f64 %0, %1" : "=w"(r) : "w"(x)); return r; }
   #define SQRTF(x) sqrtf_hw(x)
   #define SQRTD(x) sqrtd_hw(x)
+#else   /* analizador del IDE (clangd, destino x86): solo para que no marque errores; el ARM compila la rama de arriba */
+  #define SQRTF(x) __builtin_sqrtf(x)
+  #define SQRTD(x) __builtin_sqrt(x)
 #endif
 static inline float rs(float x) { return 1.0f / SQRTF(x); }
 
@@ -148,9 +170,11 @@ static void qspi_init(int i) {
 }
 
 /* Una transaccion: tx[0..n-1] -> rx[0..n-1] bajo un mismo CS (ss = 0: A/G, 1: mag). Bloqueante. Devuelve 0 si bien. */
+static int g_gap_reads = 0;   /* lecturas ficticias (~0,25 us cada una) entre bajar CS y arrancar SCK: se usa en spi_diag */
 static int qspi_xfer(int imu, int ss, const uint8_t *tx, uint8_t *rx, int n) {
     const uint32_t b = QSPI_BASE(imu);
     Xil_Out32(b + SPISSR, (~(1u << ss)) & 0x3u);
+    for (int k = 0; k < g_gap_reads; k++) (void)Xil_In32(b + SPISR);
     for (int k = 0; k < n; k++) Xil_Out32(b + SPIDTR, tx[k]);
     Xil_Out32(b + SPICR, CR_RUN);                                      /* quita el inhibit: empieza a desplazar */
     uint32_t guard = 0;
@@ -181,14 +205,52 @@ static int imu_config(int i) {
     uint8_t w;
     if (reg_read1(i, CS_AG, 0x0F, &w) || w != 0x68) { printf("IMU%d: WHO_AM_I A/G = 0x%02X (esperado 0x68)\r\n", i, w); return -1; }
     if (reg_read1(i, CS_MAG, 0x0F, &w) || w != 0x3D) { printf("IMU%d: WHO_AM_I mag = 0x%02X (esperado 0x3D)\r\n", i, w); return -1; }
-    reg_write(i, CS_AG, 0x10, (3u << 5) | (1u << 3));    /* CTRL_REG1_G: 119 Hz, 500 dps */
-    reg_write(i, CS_AG, 0x20, (3u << 5));                /* CTRL_REG6_XL: 119 Hz, +-2 g */
+    reg_write(i, CS_AG, 0x10, (ODR_CODE << 5) | (1u << 3));    /* CTRL_REG1_G: ODR, 500 dps */
+    reg_write(i, CS_AG, 0x20, (ODR_CODE << 5));                /* CTRL_REG6_XL: ODR, +-2 g */
     reg_write(i, CS_AG, 0x22, 0x44);                     /* BDU, IF_ADD_INC */
     reg_write(i, CS_MAG, 0x20, (7u << 2));               /* CTRL_REG1_M: ODR 80 Hz */
     reg_write(i, CS_MAG, 0x22, 0x00);                    /* modo continuo */
     reg_write(i, CS_MAG, 0x24, 0x40);                    /* BDU_M */
     reg_write(i, CS_MAG, 0x23, 0x00);                    /* CTRL_REG4_M: OMZ bajo consumo */
     return 0;
+}
+
+
+/* Diagnostico: si el WHO_AM_I falla, vuelca lo que devuelve el bus en varias condiciones, para ver QUE cambia. */
+static void spi_diag(int i) {
+    const uint32_t b = QSPI_BASE(i);
+    printf("--- DIAGNOSTICO IMU%d ---\r\n", i);
+    printf("SPICR=0x%03lX SPISR=0x%02lX SPISSR=0x%lX\r\n", (unsigned long)Xil_In32(b + SPICR), (unsigned long)Xil_In32(b + SPISR), (unsigned long)Xil_In32(b + SPISSR));
+    /* Cuantos bits implementa SPISSR (= C_NUM_SS_BITS): se escribe y se relee. Con 2 bits debe leerse lo escrito (3, 2, 1, 0). */
+    printf("SPISSR escribe->lee:");
+    for (int v = 3; v >= 0; v--) { Xil_Out32(b + SPISSR, (uint32_t)v); printf("  %d->%lu", v, (unsigned long)Xil_In32(b + SPISSR)); }
+    Xil_Out32(b + SPISSR, 0x3u);
+    printf("\r\n");
+    static const int gaps[3] = { 0, 40, 400 };
+    for (int g = 0; g < 3; g++) {
+        g_gap_reads = gaps[g];
+        for (int cs = 0; cs < 2; cs++) {
+            printf("hueco %3d | %s:", gaps[g], cs == CS_AG ? "A/G" : "mag");
+            for (int rep = 0; rep < 4; rep++) {
+                uint8_t t[2] = { 0x8F, 0 }, r[2] = { 0, 0 };
+                int e = qspi_xfer(i, cs, t, r, 2);
+                printf(" 0x%02X%s", r[1], e ? "(err)" : "");
+            }
+            printf("   (con MS=1, 0xCF):");
+            for (int rep = 0; rep < 2; rep++) {
+                uint8_t t[2] = { 0xCF, 0 }, r[2] = { 0, 0 };
+                qspi_xfer(i, cs, t, r, 2); printf(" 0x%02X", r[1]);
+            }
+            printf("\r\n");
+        }
+    }
+    g_gap_reads = 0;
+    /* el mag el PRIMERO tras un reset del IP (sin haber leido antes el A/G) */
+    qspi_init(i);
+    uint8_t t[2] = { 0x8F, 0 }, r[2] = { 0, 0 };
+    qspi_xfer(i, CS_MAG, t, r, 2);
+    printf("mag primero tras reset: 0x%02X\r\n", r[1]);
+    printf("Esperado: A/G 0x68, mag 0x3D. Copia estas lineas.\r\n");
 }
 
 /* ---- estado y estadisticas por IMU ---- */
@@ -261,10 +323,10 @@ static void print_stats(const char *name, double secs, uint32_t printed) {
     printf("Tiempo de SPI+filtro: %.2f %% de la CPU (el sondeo del estado ocupa el resto: el procesador esta al 100 %% mientras dura la adquisicion)\r\n", busy / (secs * 1e6) * 100.0);
 }
 
-static int run_phase(const char *name, int print_every) {
+static int run_phase(const char *name, int print_every, int seconds) {
     clear_stats();
     uint32_t printed = 0;
-    const uint64_t t_begin = gt_now(); const uint64_t t_end = t_begin + (uint64_t)(PHASE_SECONDS * g_hz);
+    const uint64_t t_begin = gt_now(); const uint64_t t_end = t_begin + (uint64_t)(seconds * g_hz);
     while (gt_now() < t_end) for (int i = 0; i < N_IMU; i++) imu_step(i, print_every, &printed);
     const double secs = (double)(gt_now() - t_begin) / g_hz;
     print_stats(name, secs, printed);
@@ -277,15 +339,15 @@ int main(void) {
 #else
     g_hz = gt_hz_calibrate();
 #endif
-    printf("\r\n=== Linea base en software de extremo a extremo: %d IMU, SPI %.3f MHz, temporizador %.3f MHz ===\r\n", N_IMU, 100.0 / 32.0, g_hz / 1e6);
+    printf("\r\n=== Linea base en software de extremo a extremo: %d IMU, ODR %d Hz, SPI %.3f MHz, temporizador %.3f MHz ===\r\n", N_IMU, ODR_HZ, 100.0 / 32.0, g_hz / 1e6);
     for (int i = 0; i < N_IMU; i++) {
         qspi_init(i);
-        if (imu_config(i)) { printf("fallo al configurar la IMU %d: se detiene\r\n", i); return -1; }
+        if (imu_config(i)) { spi_diag(i); printf("fallo al configurar la IMU %d: se detiene\r\n", i); return -1; }
         G[i].q[0] = -1.0f; G[i].q[1] = 0; G[i].q[2] = 0; G[i].q[3] = 0.2f;     /* misma semilla que la cadena en hardware */
         G[i].m[0] = G[i].m[1] = G[i].m[2] = 0;
     }
     /* sesgo del giroscopio con las placas QUIETAS (media de GYRO_BIAS_FRAMES tramas, como GYRO_AT_BOOT en la cadena en hardware) */
-    printf("Midiendo el sesgo del giroscopio (~%d s, placas quietas)...\r\n", GYRO_BIAS_FRAMES / 119);
+    printf("Midiendo el sesgo del giroscopio (~%d s, placas quietas)...\r\n", GYRO_BIAS_FRAMES / ODR_HZ);
     for (int i = 0; i < N_IMU; i++) {
         int32_t acc[3] = {0, 0, 0}; int n = 0;
         while (n < GYRO_BIAS_FRAMES) {
@@ -298,9 +360,9 @@ int main(void) {
         printf("IMU%d: sesgo giro = (%d, %d, %d) cuentas\r\n", i, G[i].goff[0], G[i].goff[1], G[i].goff[2]);
     }
     const uint64_t t0 = gt_now(); for (int i = 0; i < N_IMU; i++) G[i].t_start = t0;
-    run_phase("FASE A: sin salida por la UART", 0);
-    run_phase("FASE B: una linea cada 12 tramas (10 Hz) por la UART", 12);
-    run_phase("FASE C: una linea por trama por la UART", 1);
+    run_phase("FASE A: sin salida por la UART", 0, PHASE_SECONDS);
+    run_phase("FASE B: una linea cada ~100 ms (10 Hz) por la UART", PRINT_10HZ, PHASE_SECONDS);
+    run_phase("FASE C: una linea por trama por la UART", 1, PHASE_C_SECONDS);
     printf("\r\nFin. Copia las tres tablas.\r\n");
     return 0;
 }
