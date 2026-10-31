@@ -1,0 +1,9 @@
+Publicando en /madgwick/q cada 20 ms. (119 Hz)
+CPU libre 99.6 % | publicados 400, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 800, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 1200, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 1600, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 2000, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 2400, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 2800, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 3200, errores 0, incoherentes 0

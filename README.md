@@ -28,6 +28,9 @@ PS (Zynq) solo por AXI-Lite: configuración, calibración y lectura de q por UAR
 | `Integration_Zybo_multi/` | Integración de **1 a 4 Pmod NAV** (JE, JD, JC, JA) con un único núcleo Madgwick (proyecto `zybo_multi`). `axis_rr_mux4.vhd` es el árbitro round-robin de las 4 entradas; `report_multi.tcl` extrae timing, utilización y potencia |
 | `Integration_Zybo_dual/` | **Los dos núcleos a la vez** (original y opt2) alimentados con la misma trama por un `axis_broadcaster`; `main.c` compara sus cuaterniones y captura un CSV para el análisis offline |
 | `Software_Baseline_ARM/` | El mismo filtro Madgwick en el Cortex-A9 con la misma entrada que el núcleo: tiempo por actualización, diferencia numérica y carga de CPU (ver su README) |
+| `Integration_Zybo_multi/vitis_freertos/` | FreeRTOS en el Cortex-A9 con la cadena en la PL (mismo bitstream de `zybo_multi`): `main_freertos_pl.c` (lectura de los cuaterniones y CPU libre) y `main_microros_udp.c` (publica los cuaterniones a ROS 2 con micro-ROS por UDP/Ethernet). Ver su README |
+| `ros/` | `imu_tf.py`: nodo de Python para RViz2 (una transformación por IMU y el ángulo relativo de la bisagra) |
+| `microros/` | Cómo generar la biblioteca estática de micro-ROS para el Cortex-A9, configurar la red y el agente (WSL2) y repetir las medidas; `zynq_toolchain.cmake` |
 | `analysis/capture_raw.py`, `replay_variants.py`, `viewer_live.py`, `plot_drift.py`, `mag_ellipsoid.py` | Captura cruda por UART, reproducción del filtro fuera de línea (temperatura, magnetómetro), visor en vivo de 2 IMU y calibración elipsoidal del magnetómetro |
 
 
@@ -247,6 +250,7 @@ Registros de `nav_spi_ctrl` (base `0x40000000`): `0x00` CTRL, `0x04` ODR_CFG, `0
 * v0.6.2: línea base en el ARM con interrupciones (`main_irq.c`, temporizador privado + GIC). Con 4 IMU deja libre el 95,8 % de la CPU a 119 Hz y el 71,1 % a 952 Hz (28,8 % ocupada), sin perder tramas con una línea por trama por la UART; la cadena en la PL sigue sin usar CPU. Datos en `data/e2e/`.
 * v0.6.3: criterio de tramas perdidas de `main_irq.c` corregido (0 tramas perdidas en todas las fases con 4 IMU a 119 y 952 Hz); la entrada de v0.3.0 del CHANGELOG ahora describe el sistema dual de la etiqueta.
 * v0.6.4: sensibilidad de la línea base con interrupciones a `POLL_DIV` (1, 2 y 4) con 4 IMU: `POLL_DIV 2` no pierde tramas a 119 ni a 952 Hz; con 1 faltan hasta el 1,8 % y con 4 la rutina desborda el tick en ≈ 1,1 % de las llamadas a 952 Hz. Datos en `data/e2e/`.
+* v0.7.0: micro-ROS sobre FreeRTOS con la cadena en la PL (bitstream sin cambios): el Cortex-A9 publica los 4 cuaterniones a ROS 2 por UDP/Ethernet y deja libre el 99,6 % de la CPU con 200 mensajes/s, tanto a 119 como a 952 Hz (99,9 % con 40 mensajes/s). Código en `Integration_Zybo_multi/vitis_freertos/`, guía en `microros/`, datos en `data/ros/`.
 * Pendiente: calibración del magnetómetro de la IMU de JA (mayor residuo de coherencia); capturas sin cable y con referencia externa.
 
 ## Licencia

@@ -1,0 +1,39 @@
+=== FreeRTOS + PL + micro-ROS (UDP): 4 IMU, ODR 952 Hz ===
+Referencia de CPU (inactividad): 4.762e+07 it/s
+IMU0: periodo medido 1035.611 us
+IMU1: periodo medido 1026.750 us
+IMU2: periodo medido 1038.559 us
+IMU3: periodo medido 1007.238 us
+PL lista; arrancando la red.
+Red: IP 192.168.50.2, agente 192.168.50.1:8888
+Start PHY autonegotiation
+Waiting for PHY to complete autonegotiation.
+autonegotiation complete
+link speed for phy address 1: 1000
+Esperando al agente en 192.168.50.1:8888 ...
+Agente encontrado.
+Publicando en /madgwick/q cada 20 ms.
+CPU libre 99.6 % | publicados 400, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 800, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 1200, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 1600, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 2000, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 2400, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 2800, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 3200, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 3600, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 4000, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 4400, errores 0, incoherentes 0
+CPU libre 99.7 % | publicados 4800, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 5200, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 5600, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 6000, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 6400, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 6800, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 7200, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 7600, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 8000, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 8400, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 8800, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 9200, errores 0, incoherentes 0
+CPU libre 99.6 % | publicados 9600, errores 0, incoherentes 0

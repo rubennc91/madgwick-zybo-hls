@@ -1,5 +1,30 @@
 # Cambios
 
+## v0.7.0 — micro-ROS sobre FreeRTOS con la cadena en la PL
+
+**Software**: `Integration_Zybo_multi/vitis_freertos/` (nuevo). El bitstream de `Integration_Zybo_multi` no cambia; el Cortex-A9 ejecuta FreeRTOS 10 en lugar de código sin sistema operativo.
+* `main_freertos_pl.c`: configura la PL como `main_pl.c`, lee los cuaterniones de las IMU por AXI-Lite cada 20 ms con lectura coherente (`frame_cnt` antes y después) y mide la CPU libre con el contador del gancho de inactividad. Con 4 IMU a 119 Hz: 98,9 % de CPU libre imprimiendo cada 2 s por la UART.
+* `main_microros_udp.c`: además inicia lwIP (Ethernet del PS, IP estática) y un cliente micro-ROS (ROS 2 Humble, biblioteca estática para el Cortex-A9, transporte UDP personalizado con sockets lwIP). Publica un `geometry_msgs/QuaternionStamped` por IMU en `/madgwick/q` (`frame_id` `imu0` a `imu3`, best effort, marca de tiempo sincronizada con el agente) y la CPU libre en `/madgwick/cpu_free` (`std_msgs/Float32`, cada 2 s). Macros `N_IMU`, `ODR_HZ`, `PUB_MS`, `STAT_S`, `BOARD_IP`, `AGENT_IP`, `AGENT_PORT`, `Q_W_FIRST`. La lectura que coincide con una escritura del núcleo se repite una vez.
+
+**Guía**: `microros/README.md` y `microros/zynq_toolchain.cmake` (cómo generar `libmicroros.a`, configurar Vitis, la red, el agente en WSL2 y el cortafuegos).
+
+**Visualización**: `ros/imu_tf.py` (nodo de Python para RViz2: una transformación por IMU a partir de `/madgwick/q` y el ángulo relativo de la bisagra); sin probar con la placa en el momento de escribir esta entrada.
+
+**Datos**: `data/ros/` (extractos de consola y resumen de `ros2 topic hz`; no son los logs completos).
+
+**Resultados** (4 IMU quietas, cable directo placa-portátil a 1000 Mbps, agente en WSL2 con red mirrored; cada prueba dura de 15 a 65 s)
+
+| ODR | Mensajes/s | CPU libre | Tasa en el suscriptor | Errores de publicación | Lecturas descartadas |
+|---|---|---|---|---|---|
+| 119 Hz | 40 | 99,9 % | 40,0 Hz | 0 | 0 |
+| 119 Hz | 200 | 99,6 % | 200,1 Hz | 0 | 0 |
+| 952 Hz | 40 | 99,9 % | 40,0 Hz | 0 | 0 |
+| 952 Hz | 200 | 99,6 % | 200,0 Hz | 0 | 0 de 9 600 |
+
+* Publicar cuesta como mucho unos 20 µs de CPU por mensaje (orden de magnitud; la resolución de la medida es 0,1 %). La última fila se midió con la lectura repetida una vez; sin la repetición, la misma condición dio 199,7 Hz y 8 de 6 000 lecturas descartadas (0,13 %), que explican exactamente la diferencia: no eran pérdidas de red. Las otras filas se midieron sin la repetición y no descartaron ninguna.
+* Intervalo máximo entre mensajes en el suscriptor con 200 mensajes/s: 28 ms a 119 Hz y 46 ms a 952 Hz (portátil sin tiempo real).
+* Sin medir: latencia de la muestra al mensaje ROS, Linux con ROS 2 completo, sensores en movimiento. La referencia de CPU varió entre ejecuciones con el mismo código y la misma compilación (4,762e7 it/s; en dos ejecuciones a 952 Hz fue 2,016e7), probablemente por el estado de la placa o el modo de lanzamiento; el porcentaje está normalizado en cada ejecución. Falta por comprobar el orden de los componentes del cuaternión (`Q_W_FIRST`) falta por comprobar girando la placa.
+
 ## v0.6.4 — sensibilidad de la línea base con interrupciones al periodo del temporizador
 
 **Datos**: `data/e2e/irq4_O3_119_div1.log`, `irq4_O3_119_div4.log`, `irq4_O3_952_div1.log` e `irq4_O3_952_div4.log` (4 IMU, `main_irq.c` de la v0.6.3 con `POLL_DIV` 1 y 4; `POLL_DIV 2` son los `irq4_O3_119.log` e `irq4_O3_952.log`). No cambia ningún fichero de código.

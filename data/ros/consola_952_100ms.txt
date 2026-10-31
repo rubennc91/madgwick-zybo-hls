@@ -1,0 +1,23 @@
+=== FreeRTOS + PL + micro-ROS (UDP): 4 IMU, ODR 952 Hz ===
+Referencia de CPU (inactividad): 2.016e+07 it/s
+IMU0: periodo medido 1035.631 us
+IMU1: periodo medido 1026.733 us
+IMU2: periodo medido 1038.540 us
+IMU3: periodo medido 1007.233 us
+PL lista; arrancando la red.
+Red: IP 192.168.50.2, agente 192.168.50.1:8888
+Start PHY autonegotiation
+Waiting for PHY to complete autonegotiation.
+autonegotiation complete
+link speed for phy address 1: 1000
+Esperando al agente en 192.168.50.1:8888 ...
+Agente encontrado.
+Publicando en /madgwick/q cada 100 ms.
+CPU libre 99.9 % | publicados 80, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 160, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 240, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 320, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 400, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 480, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 560, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 640, errores 0, incoherentes 0

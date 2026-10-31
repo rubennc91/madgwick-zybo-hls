@@ -1,0 +1,47 @@
+=== FreeRTOS + PL + micro-ROS (UDP): 4 IMU, ODR 119 Hz ===
+Referencia de CPU (inactividad): 4.762e+07 it/s
+IMU0: periodo medido 8292.091 us
+IMU1: periodo medido 8220.842 us
+IMU2: periodo medido 8316.032 us
+IMU3: periodo medido 8066.045 us
+PL lista; arrancando la red.
+Red: IP 192.168.50.2, agente 192.168.50.1:8888
+Start PHY autonegotiation
+Waiting for PHY to complete autonegotiation.
+autonegotiation complete
+link speed for phy address 1: 1000
+Esperando al agente en 192.168.50.1:8888 ...
+Agente encontrado.
+Publicando en /madgwick/q cada 100 ms.
+CPU libre 99.9 % | publicados 80, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 160, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 240, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 320, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 400, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 480, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 560, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 640, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 720, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 800, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 880, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 960, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1040, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1120, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1200, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1280, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1360, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1440, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1520, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1600, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1680, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1760, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1840, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 1920, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2000, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2080, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2160, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2240, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2320, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2400, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2480, errores 0, incoherentes 0
+CPU libre 99.9 % | publicados 2560, errores 0, incoherentes 0
