@@ -1,5 +1,15 @@
 # Cambios
 
+## v0.7.1 — demo de la bisagra en RViz2 con los valores de ROS
+
+**Software**: `ros/` (sin cambios en el código de la placa ni en el bitstream).
+* `ros/imu_tf.py`: el ángulo relativo se publica también como texto (`/hinge/marker`) y cada IMU se dibuja como una caja con una cara de color por eje (`/imu/box`). Parámetros nuevos: `mode` (`axis` o `total`), `tare` (cero en la primera muestra), `yaw_tare` (iguala el rumbo de las IMU) y `box_size`; el parámetro `hinge_axis` acepta `y` sin que ROS lo interprete como booleano. Escribe cada 2 s el cuaternión relativo entre `imu_a` e `imu_b` como diagnóstico.
+* `ros/imu_tf.rviz` (configuración de RViz2) y `ros/start_demo.bat` (abre en Windows Terminal el agente, los topics, el nodo, el ángulo y RViz2).
+* `ros/README.md`: requisitos, uso, parámetros, qué se observó y problemas típicos.
+* `microros/README.md`: la sección de RViz2 remite a `ros/README.md`.
+
+**Comprobado**: con 4 Pmod NAV (imu0 = JE, imu1 = JD, imu2 = JC, imu3 = JA) los movimientos de las cuatro IMU en RViz2 son coherentes con el movimiento real, lo que confirma el orden de los componentes del cuaternión (`Q_W_FIRST 1`). Con `mode:=total` y `tare:=true` una apertura de la bisagra estimada a ojo en 90° dio 88,7°, 89,8° y 94,7° en tres muestras seguidas. No es una medida calibrada: no se ha comparado con una escuadra ni con una referencia externa. El rumbo (yaw) de cada IMU viene del magnetómetro y difiere entre sensores (≈130° entre las dos de la bisagra); `tare` lo cancela al arrancar pero no evita su deriva.
+
 ## v0.7.0 — micro-ROS sobre FreeRTOS con la cadena en la PL
 
 **Software**: `Integration_Zybo_multi/vitis_freertos/` (nuevo). El bitstream de `Integration_Zybo_multi` no cambia; el Cortex-A9 ejecuta FreeRTOS 10 en lugar de código sin sistema operativo.
@@ -8,7 +18,7 @@
 
 **Guía**: `microros/README.md` y `microros/zynq_toolchain.cmake` (cómo generar `libmicroros.a`, configurar Vitis, la red, el agente en WSL2 y el cortafuegos).
 
-**Visualización**: `ros/imu_tf.py` (nodo de Python para RViz2: una transformación por IMU a partir de `/madgwick/q` y el ángulo relativo de la bisagra); sin probar con la placa en el momento de escribir esta entrada.
+**Visualización**: `ros/imu_tf.py` (nodo de Python para RViz2: una transformación por IMU a partir de `/madgwick/q` y el ángulo relativo de la bisagra); se probó con la placa después (ver v0.7.1).
 
 **Datos**: `data/ros/` (extractos de consola y resumen de `ros2 topic hz`; no son los logs completos).
 
@@ -23,7 +33,7 @@
 
 * Publicar cuesta como mucho unos 20 µs de CPU por mensaje (orden de magnitud; la resolución de la medida es 0,1 %). La última fila se midió con la lectura repetida una vez; sin la repetición, la misma condición dio 199,7 Hz y 8 de 6 000 lecturas descartadas (0,13 %), que explican exactamente la diferencia: no eran pérdidas de red. Las otras filas se midieron sin la repetición y no descartaron ninguna.
 * Intervalo máximo entre mensajes en el suscriptor con 200 mensajes/s: 28 ms a 119 Hz y 46 ms a 952 Hz (portátil sin tiempo real).
-* Sin medir: latencia de la muestra al mensaje ROS, Linux con ROS 2 completo, sensores en movimiento. La referencia de CPU varió entre ejecuciones con el mismo código y la misma compilación (4,762e7 it/s; en dos ejecuciones a 952 Hz fue 2,016e7), probablemente por el estado de la placa o el modo de lanzamiento; el porcentaje está normalizado en cada ejecución. Falta por comprobar el orden de los componentes del cuaternión (`Q_W_FIRST`) falta por comprobar girando la placa.
+* Sin medir: latencia de la muestra al mensaje ROS, Linux con ROS 2 completo, sensores en movimiento. La referencia de CPU varió entre ejecuciones con el mismo código y la misma compilación (4,762e7 it/s; en dos ejecuciones a 952 Hz fue 2,016e7), probablemente por el estado de la placa o el modo de lanzamiento; el porcentaje está normalizado en cada ejecución. El orden de los componentes del cuaternión (`Q_W_FIRST`) se comprobó después en RViz2 (ver v0.7.1).
 
 ## v0.6.4 — sensibilidad de la línea base con interrupciones al periodo del temporizador
 

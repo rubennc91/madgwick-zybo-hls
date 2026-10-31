@@ -69,7 +69,7 @@ ros2 topic echo /madgwick/cpu_free --once --no-daemon
 
 * **USB del FTDI con `usbipd`**: la Zybo expone JTAG y UART por un solo FTDI (0403:6010). Con `usbipd bind --force` + `attach` salió `Device in error state` y dejó el dispositivo inutilizable en Vitis hasta `usbipd detach` + `unbind` y reconectar el cable. Por eso el transporte es UDP; la versión por UART no se probó.
 * La sesión con el agente no se recupera sola: tras reiniciar el agente hay que reiniciar la aplicación.
-* El orden de los componentes del cuaternión es `(w,x,y,z)` por defecto (`Q_W_FIRST 1`); si al girar la placa sobre un eje horizontal varían `z` y `w` en vez de `x` o `y`, compila con `-DQ_W_FIRST=0`. No se ha comprobado todavía.
+* El orden de los componentes del cuaternión es `(w,x,y,z)` por defecto (`Q_W_FIRST 1`); si al girar la placa sobre un eje horizontal varían `z` y `w` en vez de `x` o `y`, compila con `-DQ_W_FIRST=0`. Comprobado en RViz2 con 4 IMU: el orden por defecto es el correcto.
 * Las pruebas a 119 Hz y la de 952 Hz con 40 mensajes/s se midieron sin repetir la lectura incoherente; la de 952 Hz con 200 mensajes/s, con la repetición (0 de 9 600 descartadas; sin ella, 8 de 6 000).
 * La referencia de CPU libre (iteraciones por segundo del gancho de inactividad) cambió entre ejecuciones idénticas (4,762e7 frente a 2,016e7); el porcentaje se normaliza en cada ejecución. Conviene reiniciar el sistema antes de cada ejecución.
 
@@ -85,13 +85,11 @@ La secuencia es la habitual de `xsct` para el Zynq-7000 (FPGA, `ps7_init`, carga
 
 ## 6. Visualización en RViz2
 
-`ros/imu_tf.py` (en la raíz de la release) publica una transformación `world -> imuN` por cada mensaje de `/madgwick/q` y el ángulo relativo entre dos IMU en `/hinge/angle_deg`.
+La demo (transformaciones, cajas de colores, ángulo de la bisagra y el arranque con un solo clic) está en `ros/`; ver `ros/README.md`.
 
 ```bash
 sudo apt install -y ros-humble-rviz2        # una vez; las ventanas salen por WSLg
 source /opt/ros/humble/setup.bash
-python3 ros/imu_tf.py --ros-args -p imu_a:=imu0 -p imu_b:=imu1 -p hinge_axis:=y
-# en otra terminal (con ROS cargado): rviz2   -> Fixed Frame = world, Add -> TF
+python3 ros/imu_tf.py --ros-args -p imu_a:=imu0 -p imu_b:=imu1 -p mode:=total -p tare:=true
+rviz2 -d ros/imu_tf.rviz
 ```
-
-Las IMU se colocan separadas `spacing` metros a lo largo de X solo para verlas; el giro de cada una es el cuaternión recibido.
