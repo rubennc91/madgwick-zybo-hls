@@ -1,5 +1,11 @@
 # Cambios
 
+## v0.7.2 — modo de gravedad en la demo de la bisagra
+
+**Software**: `ros/imu_tf.py` gana `mode:=gravity`: el ángulo de la bisagra es el ángulo entre los ejes z de las dos IMU en el mundo (solo acelerómetro, sin rumbo). `ros/README.md` documenta el parámetro y la medida.
+
+**Medida** (un bag de 231 s, bisagra a 0°, 30, 45, 60 y 90° con escuadra y cartabón, con 0° entre cada tramo; referencias supuestas en ese orden): con `tare:=true`, `gravity` da 27,6° / 43,0° / 59,4° / 92,4° y `total` 28,9° / 46,0° / 66,4° / 109,7°. El ángulo vuelve a 0° (≤ 0,4°) entre tramos. El rumbo relativo entre las dos IMU cambia de 130° a 122°, 112° y 94° al abrir y recupera los 130°: error del magnetómetro dependiente de la inclinación, hipótesis sin comprobar con datos crudos (puede deberse a que los `MAG_PRESET` no corresponden al montaje). Una sola secuencia; no es una medida de exactitud calibrada.
+
 ## v0.7.1 — demo de la bisagra en RViz2 con los valores de ROS
 
 **Software**: `ros/` (sin cambios en el código de la placa ni en el bitstream).

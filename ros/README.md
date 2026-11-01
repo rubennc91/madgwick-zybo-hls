@@ -27,7 +27,7 @@ Probado con 4 Pmod NAV, FreeRTOS + micro-ROS sobre UDP, el agente en WSL2 (red `
 | Parámetro | Por defecto | Efecto |
 |---|---|---|
 | `imu_a`, `imu_b` | `imu0`, `imu1` | IMU de las dos hojas; el ángulo es la rotación de `imu_b` respecto a `imu_a` (intercambiarlas invierte el signo) |
-| `mode` | `axis` | `axis`: ángulo proyectado sobre `hinge_axis`. `total`: ángulo total de la rotación relativa (con el eje de giro real distinto del elegido, `axis` da un valor menor) |
+| `mode` | `axis` | `axis`: ángulo proyectado sobre `hinge_axis`. `total`: ángulo total de la rotación relativa (con el eje de giro real distinto del elegido, `axis` da un valor menor). `gravity`: solo gravedad, el ángulo entre los ejes z de las dos IMU; no depende del rumbo (yaw), vale para una bisagra de eje horizontal con una hoja plana y se recomienda con `tare:=true` |
 | `tare` | `false` | `true`: el ángulo es 0 en la primera muestra de las dos IMU (cancela el desfase de montaje y de yaw entre ellas) |
 | `hinge_axis` | `y` | `x`, `y` o `z`: eje que fija el signo en `mode:=total` y el eje de proyección en `mode:=axis` |
 | `yaw_tare` | `false` | `true`: iguala el rumbo (yaw) de todas las IMU en su primera muestra; supone IMU planas al arrancar y no sirve en IMU inclinadas o verticales |
@@ -41,6 +41,16 @@ Cajas: +x rojo, −x rojo oscuro, +y verde, −y verde oscuro, +z azul, −z azu
 * Con `mode:=total` y `tare:=true`, una apertura de la bisagra a unos 90° estimados a ojo dio cambios de 88,7°, 89,8° y 94,7° en tres muestras consecutivas del log. No se ha comparado con una escuadra ni con una referencia externa.
 * Con `mode:=axis` y `hinge_axis:=y` el mismo giro daba unos 82° (el eje de giro relativo salió casi en x), y sin `tare` el valor en reposo era de unos 14° a 35° según la prueba.
 * En reposo la rotación relativa entre las dos IMU de la bisagra era de ≈130°, casi toda en z: el rumbo de cada IMU viene del magnetómetro y no coincide entre sensores. `tare` lo cancela al arrancar, pero si el rumbo de una IMU deriva, el ángulo derivará aunque la bisagra esté quieta. Las pruebas se hicieron a ≈1 m de los equipos electrónicos.
+* Un bag de 231 s (`ros2 bag record /hinge/angle_deg /madgwick/q`) con la bisagra a 0°, 30, 45, 60 y 90° (escuadra y cartabón; ángulos supuestos en ese orden, con 0° entre cada uno y al final) dio, con `tare:=true`:
+
+  | Referencia | `mode:=gravity` | `mode:=total` |
+  |---|---|---|
+  | 30° | 27,6° | 28,9° |
+  | 45° | 43,0° | 46,0° |
+  | 60° | 59,4° | 66,4° |
+  | 90° | 92,4° | 109,7° |
+
+  El ángulo vuelve a 0° (error ≤ 0,4°) entre tramos y al final. El rumbo relativo entre las dos IMU baja de 130° a 122°, 112° y 94° al abrir y vuelve a 130°, lo que apunta a un error del magnetómetro que depende de la inclinación (posiblemente presets `MAG_PRESET` de otro montaje); no se ha comprobado con datos crudos del magnetómetro. Es un solo bag; con `mode:=total` el error crece con el ángulo y con `mode:=gravity` no.
 * El ángulo sale negativo al abrir; para positivo, intercambia `imu_a` e `imu_b`.
 * Sin probar: `hinge_axis:=x` con `mode:=total` y `yaw_tare` con la bisagra (con IMU planas y paralelas ayudó en imu2 e imu3, pero no en imu0 e imu1 sobre los cuadernos).
 

@@ -66,6 +66,12 @@ def conj(q):
     return (-q[0], -q[1], -q[2], q[3])
 
 
+def z_axis(q):
+    """Eje z del sensor expresado en el mundo (tercera columna de la matriz de rotacion de q)."""
+    x, y, z, w = q
+    return (2.0 * (x * z + w * y), 2.0 * (y * z - w * x), 1.0 - 2.0 * (x * x + y * y))
+
+
 def mul(a, b):  # producto de Hamilton, (x, y, z, w)
     ax, ay, az, aw = a
     bx, by, bz, bw = b
@@ -91,7 +97,7 @@ class ImuTf(Node):
         axis = self.get_parameter('hinge_axis').value
         axis = 'y' if axis is True else str(axis).lower()
         self.axis = {'x': 0, 'y': 1, 'z': 2}[axis]
-        self.declare_parameter('mode', 'axis')   # axis: proyectado sobre hinge_axis; total: angulo total de giro relativo
+        self.declare_parameter('mode', 'axis')   # axis: proyectado sobre hinge_axis; total: angulo total de giro relativo; gravity: solo gravedad (sin rumbo)
         self.declare_parameter('tare', False)    # True: el angulo es 0 en el primer par de muestras (pon la bisagra en 0 al arrancar)
         self.mode = str(self.get_parameter('mode').value).lower()
         self.tare = bool(self.get_parameter('tare').value)
@@ -99,6 +105,7 @@ class ImuTf(Node):
         self.yaw_tare = bool(self.get_parameter('yaw_tare').value)
         self.yaw0 = {}
         self.r0 = None
+        self.g0 = None   # modo gravity con tare: angulo entre las normales de las dos IMU en la primera muestra
         self.last_log = 0.0
         self.declare_parameter('box_size', [0.12, 0.08, 0.03])  # largo x, ancho y, alto z de la caja (m)
         self.box_dims = [float(v) for v in self.get_parameter('box_size').value]
@@ -154,7 +161,18 @@ class ImuTf(Node):
                 r = mul(conj(self.r0), r)
             if r[3] < 0:
                 r = tuple(-c for c in r)
-            if self.mode == 'total':
+            if self.mode == 'gravity':
+                # Solo gravedad: angulo entre los ejes z de las dos IMU en el mundo. No depende del rumbo (yaw), asi que
+                # no le afecta el error del magnetometro; vale para una bisagra de eje horizontal con una hoja plana.
+                na, nb = z_axis(self.q[self.imu_a]), z_axis(q)
+                cosg = max(-1.0, min(1.0, na[0] * nb[0] + na[1] * nb[1] + na[2] * nb[2]))
+                g = math.degrees(math.acos(cosg))
+                if self.tare:
+                    if self.g0 is None:
+                        self.g0 = g
+                    g -= self.g0
+                ang = -g if r[self.axis] < 0 else g   # el signo, como en total, sale del giro relativo
+            elif self.mode == 'total':
                 v = math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
                 ang = math.degrees(2.0 * math.atan2(v, r[3]))
                 if r[self.axis] < 0:
