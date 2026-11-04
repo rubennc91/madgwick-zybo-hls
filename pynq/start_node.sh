@@ -1,6 +1,7 @@
 #!/bin/bash
 # Lanza el nodo ROS 2 de la placa (PYNQ). Ejecutar como root, con las IMU QUIETAS los primeros ~8 s:
-#   sudo /home/xilinx/start_node.sh [n_imu] [odr_hz] [pub_hz]      (por defecto: 2 119 10.0)
+#   sudo -i /home/xilinx/start_node.sh [n_imu] [odr_hz] [pub_hz]   (por defecto: 2 119 10.0)
+# IMPORTANTE: con "sudo -i" (sesion de login de root); con "sudo" a secas PYNQ no encuentra la PL (No Devices Found).
 # BIT = ruta del .bit (el .hwh debe estar al lado, con el mismo nombre base).
 BIT="${BIT:-/home/xilinx/jupyter_notebooks/zybo/zybo_multi.bit}"
 N="${1:-2}"; ODR="${2:-119}"; HZ="${3:-10.0}"

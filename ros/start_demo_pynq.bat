@@ -9,7 +9,7 @@ set REPO=/mnt/c/workspace/Madgwick_Filter_HLS/github_ws/ros
 set BOARD=xilinx@192.168.2.99
 set ROS=source /opt/ros/humble/setup.bash ^&^& export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ^&^& export CYCLONEDDS_URI=file://%REPO%/cyclone_pc.xml
 
-wt -w 0 new-tab --title "1 Placa" ssh -t %BOARD% "sudo /home/xilinx/start_node.sh" ; ^
+wt -w 0 new-tab --title "1 Placa" ssh -t %BOARD% "sudo -i /home/xilinx/start_node.sh 4 952 50.0"; ^
  new-tab --title "2 Topics" wsl -d %DISTRO% -- bash -lc "%ROS% && sleep 25 && ros2 topic list --no-daemon && ros2 topic hz /madgwick/q" ; ^
  new-tab --title "3 Nodo TF" wsl -d %DISTRO% -- bash -lc "%ROS% && sleep 40 && python3 %REPO%/imu_tf.py --ros-args -p imu_a:=imu0 -p imu_b:=imu1 -p mode:=total -p tare:=true" ; ^
  new-tab --title "4 Angulo" wsl -d %DISTRO% -- bash -lc "%ROS% && sleep 45 && ros2 topic echo /hinge/angle_deg --no-daemon" ; ^

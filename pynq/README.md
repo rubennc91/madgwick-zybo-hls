@@ -82,7 +82,7 @@ export CYCLONEDDS_URI=file://<ruta>/cyclone_pc.xml      # ruta absoluta de WSL
 En la placa (por SSH), con las IMU quietas los primeros ~8 s:
 
 ```bash
-sudo /home/xilinx/start_node.sh            # n_imu=2, odr_hz=119, pub_hz=10
+sudo -i /home/xilinx/start_node.sh         # n_imu=2, odr_hz=119, pub_hz=10; con "sudo -i", no con "sudo" a secas
 ```
 Verás el periodo y el sesgo del giroscopio de cada IMU y, cada 5 s, `CPU libre … | publicados …, incoherentes …`. En el PC:
 
@@ -100,6 +100,7 @@ Espera hasta un minuto la primera vez: el descubrimiento no es instantáneo. El 
 | `ImportError: libspdlog.so.1` | Falta `libspdlog1` (apartado 4) |
 | El PC no ve los topics, `tcpdump` no ve paquetes de la placa | Reglas de cortafuegos (apartado 5) |
 | Idem, pero `tcpdump` sí ve tráfico | Falta `ParticipantIndex auto` o `CYCLONEDDS_URI` en esa terminal (apartado 6); la variable hay que exportarla en cada terminal |
+| `RuntimeError: No Devices Found` (`is the XRT environment sourced?`) al lanzar `start_node.sh` | Se lanzó con `sudo` a secas, que no carga el entorno de `root`: usa `sudo -i /home/xilinx/start_node.sh` |
 | `Permission denied` al escribir `cyclone_board.xml` | Lo creó `root`; escribe como `root` o con `sudo tee` |
 | `ros2 daemon stop` se queda colgado | Con WSL2 `mirrored` el daemon no responde; no lo uses |
 | `ros2 topic hz … --no-daemon`: argumento no reconocido | Ese flag solo existe en `ros2 topic list` |

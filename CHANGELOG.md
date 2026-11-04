@@ -5,17 +5,35 @@
 **Software** (bitstream sin cambios):
 * `pynq/` (nuevo): `pl_read_q.ipynb` (carga el overlay, configura la cadena como `main_pl.c` y muestra los cuaterniones), `pl_ros_node.py` (nodo `rclpy` que arranca la cadena y publica `/madgwick/q` y `/madgwick/cpu_free`, mismos tipos y `frame_id` que la versión micro-ROS), `start_node.sh`, `cyclone_board.xml` y `README.md` con la guía completa para repetirlo en otro PC.
 * `ros2_armhf/` (nuevo): receta de Docker (QEMU `linux/arm/v7`) para compilar un ROS 2 Humble mínimo (`rclcpp`, `rclpy`, `std_msgs`, `geometry_msgs`, Cyclone DDS) para el Cortex-A9. Los binarios compilados (`ros2_min_armhf.tgz`, `SHA256SUMS.txt`), el bitstream y el `.hwh` se adjuntan como activos de la release, no están en el repositorio.
-* `ros/`: `start_demo_pynq.bat` y `cyclone_pc.xml` para la demo de RViz2 con esta variante (el `.bat` no se ha ejecutado todavía).
+* `ros/`: `start_demo_pynq.bat`, `demo_pc.sh` (lado WSL2) y `cyclone_pc.xml` para la demo de RViz2 con esta variante.
 
 **Probado** (Zybo Z7-10, imagen PYNQ 3.0.1 de 32 bits, 2 IMU, 119 Hz, publicación cada 100 ms):
 * El nodo arranca en el Python de PYNQ junto a `rclpy`; periodos medidos 118,0 y 121,8 Hz.
 * La placa publica 100 mensajes cada 5 s (2 IMU × 10 Hz) con 0 lecturas incoherentes y ≈94,8 % de CPU libre. La CPU libre sale de `/proc/stat` de Linux; no es la medida del bucle de reposo de FreeRTOS de v0.7.0, así que no es comparable con esa tabla.
 * El PC (WSL2 `mirrored`, Cyclone DDS) recibe `/madgwick/q` a 20 Hz con `ros2 topic hz`.
 * Lectura de la PL desde PYNQ a 952 Hz con 2 IMU (notebook): ≈944 y ≈974 Hz, 0 tramas perdidas en 60 s.
+* La demo completa con `start_demo_pynq.bat` (nodo de la placa por SSH, topics, nodo TF, ángulo y RViz2) se ha ejecutado y funciona. `demo_pc.sh` solo se probó con `ros2`, `python3` y `rviz2` simulados.
 
-**Sin medir**: 4 IMU, 952 Hz con ROS 2, publicación a 40 o 200 Hz (puede no sostenerla el temporizador de Python), latencia de la muestra al mensaje y la tabla comparativa con micro-ROS.
+**Probado con 4 IMU** (952 Hz, `n_imu:=4 odr_hz:=952`; periodos medidos 943,8 / 974,2 / 963,0 / 992,9 Hz; 0 lecturas incoherentes en todas las pruebas; el PC recibe lo que publica la placa):
+
+| `pub_hz` por IMU | msg/s pedidos | publicados | recibidos en el PC | CPU libre |
+|---|---|---|---|---|
+| 10 | 40 | 40 | 40,0 | ≈92 % |
+| 40 | 160 | 160 | 160,0 | ≈75 % |
+| 100 | 400 | 400 | 399,5-399,8 (398,8 al final) | ≈55 % |
+| 150 | 600 | ≈540-565 | ≈532-554 | ≈45 % |
+| 200 | 800 | ≈540-570 | ≈545-571 | ≈46 % |
+
+* Hasta 100 Hz por IMU (400 mensajes/s) el nodo publica lo pedido y el hueco máximo entre mensajes es de 20 ms. Por encima satura en ≈540 mensajes/s (≈135 Hz por IMU); pedir 200 no mejora lo de 150.
+* `top` durante la saturación: `python3` al 100 % de un núcleo (50 % de CPU total, 45 % libre), así que el límite es el hilo de Python (GIL), no la PL ni la red. La cadena del filtro sigue a 952 Hz dentro de la PL.
+* A 100 Hz los dos primeros informes dan ≈83-86 % de CPU libre y luego ≈55 %; probablemente por el suscriptor del PC, que aún no estaba conectado (no comprobado).
+* `ros2 topic hz` muestra las cuatro IMU de golpe cada periodo de publicación (ráfagas de 4); el mínimo de 0,000 s y el máximo de ≈0,1 s a 10 Hz no son jitter.
+
+**Sin medir**: el ángulo de la bisagra con esta variante (no había montaje), la latencia de la muestra al mensaje y la tabla comparativa con micro-ROS.
 
 **Observaciones**:
+* PYNQ solo encuentra la PL si el nodo se lanza con `sudo -i` (sesión de login de root); con `sudo` a secas falla con `RuntimeError: No Devices Found`.
+* Una vez, al arrancar con 4 IMU, la IMU0 dio `error de configuracion (STATUS=0x3a)`: sin respuesta del acelerómetro/giroscopio (WHO_AM_I) con el magnetómetro detectado. Tras reiniciar no volvió a ocurrir; no se investigó la causa.
 * El filtro tarda unos 20 s en asentarse tras el arranque (una IMU giró ≈2,7° en ese tiempo con `beta` 0,1); el cero de la bisagra conviene ponerlo después.
 * Con la IP por DHCP, la placa pierde la dirección tras arrancar (el cliente DHCP la borra al no hallar servidor): se fija una IP estática.
 * Con WSL2 en modo `mirrored`, el tráfico de la placa solo llega a WSL2 con las dos reglas de entrada (Hyper-V y Windows) para UDP 7400-7600, y Cyclone DDS necesita `ParticipantIndex` en `auto` para el descubrimiento por unicast. El multicast no funcionó.
