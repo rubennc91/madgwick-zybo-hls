@@ -31,7 +31,7 @@ PS (Zynq) solo por AXI-Lite: configuración, calibración y lectura de q por UAR
 | `Integration_Zybo_multi/vitis_freertos/` | FreeRTOS en el Cortex-A9 con la cadena en la PL (mismo bitstream de `zybo_multi`): `main_freertos_pl.c` (lectura de los cuaterniones y CPU libre) y `main_microros_udp.c` (publica los cuaterniones a ROS 2 con micro-ROS por UDP/Ethernet). Ver su README |
 | `ros/` | Demo en RViz2 con los valores de ROS 2: `imu_tf.py` (una transformación y una caja por IMU, ángulo relativo de la bisagra), `imu_tf.rviz` y `start_demo.bat` (lanza agente, topics, nodo y RViz2). Ver su README |
 | `microros/` | Cómo generar la biblioteca estática de micro-ROS para el Cortex-A9, configurar la red y el agente (WSL2) y repetir las medidas; `zynq_toolchain.cmake` |
-| `pynq/` | ROS 2 nativo en la Zybo con PYNQ (sin micro-ROS): notebook, nodo `rclpy` que publica los cuaterniones de la PL, script de arranque y guía para repetirlo |
+| `pynq/` | ROS 2 nativo en la Zybo con PYNQ (sin micro-ROS): notebook, nodo `rclpy` que publica los cuaterniones de la PL, script de arranque y guía para repetirlo (`pynq/GUIA_REPLICAR.md`: qué instalar y en qué orden) |
 | `ros2_armhf/` | Receta de Docker para compilar un ROS 2 Humble mínimo para el Cortex-A9 (los binarios ya compilados van en los activos de la release) |
 | `analysis/capture_raw.py`, `replay_variants.py`, `viewer_live.py`, `plot_drift.py`, `mag_ellipsoid.py` | Captura cruda por UART, reproducción del filtro fuera de línea (temperatura, magnetómetro), visor en vivo de 2 IMU y calibración elipsoidal del magnetómetro |
 

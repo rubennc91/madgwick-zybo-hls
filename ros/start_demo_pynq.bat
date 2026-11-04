@@ -3,7 +3,7 @@ rem Demo en RViz2 con la Zybo + PYNQ (ROS 2 nativo en la placa, sin agente micro
 rem Abre Windows Terminal con una pestana por proceso: nodo de la placa (por SSH), comprobacion, nodo TF, angulo y RViz2.
 rem Requisitos: ver pynq/README.md (IP 192.168.2.1 en Windows y 192.168.2.99 en la placa, cortafuegos, Cyclone DDS en el PC
 rem y start_node.sh + pl_ros_node.py + cyclone_board.xml + zybo_multi.bit/.hwh ya copiados a la placa).
-rem Pon la bisagra en 0 grados y las IMU QUIETAS antes de lanzar. La pestana 1 pide la contrasena de SSH (xilinx) y la de sudo.
+rem Pon la bisagra en 0 grados y las IMU QUIETAS antes de lanzar. La pestana 1 no pide contrasena si configuraste la clave SSH y sudo sin contrasena (pynq/README.md, apartado 8); si no, pide la de SSH (xilinx) y la de sudo.
 set DISTRO=Ubuntu-22.04
 set REPO=/mnt/c/workspace/Madgwick_Filter_HLS/github_ws/ros
 set BOARD=xilinx@192.168.2.99

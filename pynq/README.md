@@ -5,15 +5,30 @@ El Cortex-A9 ejecuta Linux (imagen PYNQ 3.0.1 de 32 bits, Ubuntu 22.04) y un nod
 | Fichero | Para qué |
 |---|---|
 | `pl_read_q.ipynb` | Cuaderno de Jupyter: carga el overlay, configura la cadena (equivale a `main_pl.c`) y muestra los cuaterniones; sirve para comprobar el acceso a la PL antes de usar ROS |
-| `pl_ros_node.py` | Nodo ROS 2: arranca la cadena y publica. Parámetros: `bit`, `n_imu` (2), `odr_hz` (119 o 952), `pub_hz` (10.0), `stat_s` (5.0) |
-| `start_node.sh` | Lanza el nodo con todo el entorno (venv de PYNQ, ROS 2, Cyclone DDS) |
+| `pl_ros_node.py` | Nodo ROS 2: arranca la cadena y publica. Parámetros: `bit`, `n_imu` (2), `odr_hz` (119 o 952), `pub_hz` (10.0, por IMU), `stat_s` (5.0) |
+| `start_node.sh` | Lanza el nodo con todo el entorno (venv de PYNQ, ROS 2, Cyclone DDS). Uso: `start_node.sh [n_imu] [odr_hz] [pub_hz]` (por defecto `2 119 10.0`) |
+| `nav_diag.py` | Diagnóstico de las 4 IMU: arranca cada `nav_spi_ctrl` por separado y muestra `STATUS` y `WHO_AM_I` (solo lee) |
 | `cyclone_board.xml` | Configuración de Cyclone DDS de la placa (descubrimiento por unicast hacia el PC, 192.168.2.1) |
+
+**¿Quieres repetirlo en otro PC y otra placa?** Sigue `GUIA_REPLICAR.md`, que ordena todos los pasos (qué instalar y qué descargar). Este fichero es la referencia detallada.
 
 La receta para compilar ROS 2 para la placa está en `../ros2_armhf/`; los binarios ya compilados están en los activos de la release.
 
 ## Estado de lo probado
-* **Probado** (2 IMU, 119 Hz, `pub_hz` 10): el nodo arranca en el Python de PYNQ junto a `rclpy`; la placa publica 100 mensajes cada 5 s sin lecturas incoherentes y con ≈94,8 % de CPU libre (medida con `/proc/stat` de la placa; no es la misma medida que el bucle de reposo de FreeRTOS de micro-ROS); el PC recibe `/madgwick/q` a 20 Hz (2 IMU × 10 Hz) con `ros2 topic hz`.
-* **Sin probar**: 4 IMU, 952 Hz y publicaciones a 40 o 200 Hz (no se sabe si el temporizador de Python las sostiene), la latencia de la muestra al mensaje y la tabla comparativa con micro-ROS.
+* **2 IMU, 119 Hz, `pub_hz` 10**: el nodo arranca en el Python de PYNQ junto a `rclpy`; la placa publica 100 mensajes cada 5 s sin lecturas incoherentes y con ≈94,8 % de CPU libre (medida con `/proc/stat` de la placa; no es la misma medida que el bucle de reposo de FreeRTOS de v0.7.0, así que no es comparable con esa tabla). El PC recibe 20 Hz.
+* **4 IMU, 952 Hz** (`start_node.sh 4 952 <pub_hz>`; periodos medidos 943,8 / 974,2 / 963,0 / 992,9 Hz), 0 lecturas incoherentes en todas las pruebas y el PC recibe lo que publica la placa:
+
+| `pub_hz` por IMU | msg/s pedidos | publicados | recibidos en el PC | CPU libre |
+|---|---|---|---|---|
+| 10 | 40 | 40 | 40,0 | ≈92 % |
+| 40 | 160 | 160 | 160,0 | ≈75 % |
+| 100 | 400 | 400 | 399,5-399,8 | ≈55 % |
+| 150 | 600 | ≈540-565 | ≈532-554 | ≈45 % |
+| 200 | 800 | ≈540-570 | ≈545-571 | ≈46 % |
+
+  Hasta 100 Hz por IMU el nodo publica lo pedido. Por encima satura en ≈540 mensajes/s: `top` muestra `python3` al 100 % de un núcleo, así que el límite es el hilo de Python (no la PL ni la red). `ros2 topic hz` ve las cuatro IMU de golpe en cada periodo de publicación (ráfagas de 4).
+* **Demo completa** con `../ros/start_demo_pynq.bat` (nodo de la placa por SSH, topics, nodo TF, ángulo y RViz2): ejecutada y funciona. El **ángulo de la bisagra no se ha comprobado** con esta variante (no había montaje).
+* **Sin medir**: la latencia de la muestra al mensaje y la tabla comparativa con micro-ROS.
 
 ## Requisitos
 * Zybo Z7-10 con una imagen PYNQ 3.0.1 de 32 bits: [nick-petrovsky/PYNQ-ZYBO](https://github.com/nick-petrovsky/PYNQ-ZYBO) (hay imágenes ya compiladas para la Zybo, la Z7-10 y la Z7-20; para la Z7-10 no hace falta el paso del MAC). La placa no tiene Internet en esta configuración (cable directo al PC).
@@ -82,15 +97,40 @@ export CYCLONEDDS_URI=file://<ruta>/cyclone_pc.xml      # ruta absoluta de WSL
 En la placa (por SSH), con las IMU quietas los primeros ~8 s:
 
 ```bash
-sudo -i /home/xilinx/start_node.sh         # n_imu=2, odr_hz=119, pub_hz=10; con "sudo -i", no con "sudo" a secas
+sudo -i /home/xilinx/start_node.sh                 # n_imu=2, odr_hz=119, pub_hz=10
+sudo -i /home/xilinx/start_node.sh 4 952 10.0      # 4 IMU a 952 Hz, 10 Hz por IMU (el ODR solo admite 119 o 952)
 ```
+Usa siempre `sudo -i`, no `sudo` a secas. Con 4 IMU, `ros2 topic hz /madgwick/q` da 4 × `pub_hz` (40 Hz con 10).
 Verás el periodo y el sesgo del giroscopio de cada IMU y, cada 5 s, `CPU libre … | publicados …, incoherentes …`. En el PC:
 
 ```bash
 ros2 topic list --no-daemon
-ros2 topic hz /madgwick/q                  # ≈ 20 Hz con 2 IMU y pub_hz 10
+ros2 topic hz /madgwick/q                  # ≈ 20 Hz con 2 IMU y pub_hz 10; 40 Hz con 4 IMU
 ```
 Espera hasta un minuto la primera vez: el descubrimiento no es instantáneo. El filtro tarda unos 20 s en asentarse tras el arranque (en las pruebas, una IMU giró unos 3° en ese tiempo); pon el cero de la bisagra después.
+
+## 8. Lanzar sin contraseñas (opcional)
+Sin esto, la pestaña 1 de `start_demo_pynq.bat` pide la contraseña de SSH y la de `sudo`. Se quitan por separado, una sola vez.
+
+**Clave SSH** (PowerShell en Windows):
+```
+ssh-keygen -t ed25519
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh xilinx@192.168.2.99 "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+```
+Pulsa Intro en todas las preguntas de `ssh-keygen` para dejar la clave **sin frase**: con frase, SSH la pide cada vez (o hay que cargarla con `ssh-add`).
+
+**`sudo` sin contraseña** (en la placa):
+```bash
+echo 'xilinx ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/start_node
+sudo chmod 440 /etc/sudoers.d/start_node
+sudo visudo -c                       # debe decir "parsed OK"
+sudo -k                              # borra la caché de sudo antes de probar
+```
+Prueba desde Windows (con `-n` falla en vez de preguntar):
+```
+ssh -t xilinx@192.168.2.99 "sudo -n -i /home/xilinx/start_node.sh 4 952 10.0"
+```
+Hay que dar permiso a **todo** y no solo al script: con `sudo -i` sudo comprueba la shell que lanza el script, no el script, y una regla limitada a `start_node.sh` no encaja (se probó). Eso deja a `xilinx` con `root` sin contraseña. Es razonable en una placa con cable directo al PC y sin Internet; no lo dejes así en una red compartida (`sudo rm /etc/sudoers.d/start_node` lo quita). `visudo -c` antes de salir evita un `sudoers` roto.
 
 ## Problemas típicos
 | Síntoma | Causa y arreglo |
@@ -101,6 +141,10 @@ Espera hasta un minuto la primera vez: el descubrimiento no es instantáneo. El 
 | El PC no ve los topics, `tcpdump` no ve paquetes de la placa | Reglas de cortafuegos (apartado 5) |
 | Idem, pero `tcpdump` sí ve tráfico | Falta `ParticipantIndex auto` o `CYCLONEDDS_URI` en esa terminal (apartado 6); la variable hay que exportarla en cada terminal |
 | `RuntimeError: No Devices Found` (`is the XRT environment sourced?`) al lanzar `start_node.sh` | Se lanzó con `sudo` a secas, que no carga el entorno de `root`: usa `sudo -i /home/xilinx/start_node.sh` |
+| `RuntimeError: IMUn: error de configuracion (STATUS=0x…)` al arrancar | Esa IMU no responde: `STATUS=0x3a` es `WHO_AM_I` del acelerómetro/giroscopio sin respuesta con el magnetómetro detectado. Reconecta el Pmod y ejecuta `sudo -i python3 /home/xilinx/nav_diag.py`; debe dar `WHO A/G=0x68` y `Mag=0x3D` en cada IMU. Una vez desapareció tras reiniciar la placa |
+| La pestaña 1 pide la contraseña de SSH o de `sudo` | Apartado 8: clave SSH sin frase y `sudo` sin contraseña. Si pide la frase de la clave, quítala con `ssh-keygen -p -f $env:USERPROFILE\.ssh\id_ed25519` |
+| `sudo -n … a password is required` aunque creaste la regla | La regla limitada al script no vale con `sudo -i`; usa `NOPASSWD: ALL` (apartado 8). Comprueba con `sudo -k` antes: la caché de sudo da falsos positivos |
+| Con `pub_hz` alto llegan menos mensajes de los pedidos | El nodo de Python satura en ≈540 mensajes/s en total (≈135 Hz por IMU con 4); usa `pub_hz` ≤ 100 |
 | `Permission denied` al escribir `cyclone_board.xml` | Lo creó `root`; escribe como `root` o con `sudo tee` |
 | `ros2 daemon stop` se queda colgado | Con WSL2 `mirrored` el daemon no responde; no lo uses |
 | `ros2 topic hz … --no-daemon`: argumento no reconocido | Ese flag solo existe en `ros2 topic list` |
