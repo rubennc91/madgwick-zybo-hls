@@ -1,5 +1,26 @@
 # Cambios
 
+## v0.8.0 — ROS 2 nativo en la placa (PYNQ), sin micro-ROS
+
+**Software** (bitstream sin cambios):
+* `pynq/` (nuevo): `pl_read_q.ipynb` (carga el overlay, configura la cadena como `main_pl.c` y muestra los cuaterniones), `pl_ros_node.py` (nodo `rclpy` que arranca la cadena y publica `/madgwick/q` y `/madgwick/cpu_free`, mismos tipos y `frame_id` que la versión micro-ROS), `start_node.sh`, `cyclone_board.xml` y `README.md` con la guía completa para repetirlo en otro PC.
+* `ros2_armhf/` (nuevo): receta de Docker (QEMU `linux/arm/v7`) para compilar un ROS 2 Humble mínimo (`rclcpp`, `rclpy`, `std_msgs`, `geometry_msgs`, Cyclone DDS) para el Cortex-A9. Los binarios compilados (`ros2_min_armhf.tgz`, `SHA256SUMS.txt`), el bitstream y el `.hwh` se adjuntan como activos de la release, no están en el repositorio.
+* `ros/`: `start_demo_pynq.bat` y `cyclone_pc.xml` para la demo de RViz2 con esta variante (el `.bat` no se ha ejecutado todavía).
+
+**Probado** (Zybo Z7-10, imagen PYNQ 3.0.1 de 32 bits, 2 IMU, 119 Hz, publicación cada 100 ms):
+* El nodo arranca en el Python de PYNQ junto a `rclpy`; periodos medidos 118,0 y 121,8 Hz.
+* La placa publica 100 mensajes cada 5 s (2 IMU × 10 Hz) con 0 lecturas incoherentes y ≈94,8 % de CPU libre. La CPU libre sale de `/proc/stat` de Linux; no es la medida del bucle de reposo de FreeRTOS de v0.7.0, así que no es comparable con esa tabla.
+* El PC (WSL2 `mirrored`, Cyclone DDS) recibe `/madgwick/q` a 20 Hz con `ros2 topic hz`.
+* Lectura de la PL desde PYNQ a 952 Hz con 2 IMU (notebook): ≈944 y ≈974 Hz, 0 tramas perdidas en 60 s.
+
+**Sin medir**: 4 IMU, 952 Hz con ROS 2, publicación a 40 o 200 Hz (puede no sostenerla el temporizador de Python), latencia de la muestra al mensaje y la tabla comparativa con micro-ROS.
+
+**Observaciones**:
+* El filtro tarda unos 20 s en asentarse tras el arranque (una IMU giró ≈2,7° en ese tiempo con `beta` 0,1); el cero de la bisagra conviene ponerlo después.
+* Con la IP por DHCP, la placa pierde la dirección tras arrancar (el cliente DHCP la borra al no hallar servidor): se fija una IP estática.
+* Con WSL2 en modo `mirrored`, el tráfico de la placa solo llega a WSL2 con las dos reglas de entrada (Hyper-V y Windows) para UDP 7400-7600, y Cyclone DDS necesita `ParticipantIndex` en `auto` para el descubrimiento por unicast. El multicast no funcionó.
+* Al compilar ROS 2 para 32 bits hubo que omitir las dependencias de pruebas (`test_msgs`, 39 min bajo QEMU) y Fast DDS, y quitar de `rmw_implementation` sus dependencias de Fast DDS; ver `ros2_armhf/README.md`. Unas 2 h 15 min en total en el PC del autor.
+
 ## v0.7.2 — modo de gravedad en la demo de la bisagra
 
 **Software**: `ros/imu_tf.py` gana `mode:=gravity`: el ángulo de la bisagra es el ángulo entre los ejes z de las dos IMU en el mundo (solo acelerómetro, sin rumbo). `ros/README.md` documenta el parámetro y la medida.

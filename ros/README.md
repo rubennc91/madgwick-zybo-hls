@@ -7,6 +7,8 @@ Flujo completo (FPGA -> PS -> UDP -> agente micro-ROS -> ROS 2 -> RViz2) con un 
 | `imu_tf.py` | Nodo de Python: una transformación `world -> imuN` por mensaje de `/madgwick/q`, una caja con una cara de color por eje en cada IMU (`/imu/box`), el ángulo relativo entre dos IMU (`/hinge/angle_deg`, en grados) y ese ángulo como texto para RViz2 (`/hinge/marker`) |
 | `imu_tf.rviz` | Configuración de RViz2 (Fixed Frame `world`, TF, texto del ángulo y cajas) |
 | `start_demo.bat` | Abre Windows Terminal con 5 pestañas: agente, topics y `hz`, nodo, eco del ángulo y RViz2 |
+| `start_demo_pynq.bat` | Igual, pero con la placa Zybo + PYNQ (ROS 2 nativo en la placa, sin agente): la pestaña 1 lanza el nodo de la placa por SSH. Sin probar todavía |
+| `cyclone_pc.xml` | Configuración de Cyclone DDS del PC para esa variante (descubrimiento por unicast hacia 192.168.2.99); ver `../pynq/README.md` |
 
 Probado con 4 Pmod NAV, FreeRTOS + micro-ROS sobre UDP, el agente en WSL2 (red `mirrored`) y ROS 2 Humble en Ubuntu 22.04. Puertos: imu0 = JE, imu1 = JD, imu2 = JC, imu3 = JA.
 
@@ -22,6 +24,9 @@ Probado con 4 Pmod NAV, FreeRTOS + micro-ROS sobre UDP, el agente en WSL2 (red `
 3. Doble clic en `start_demo.bat`.
 4. Pestaña 1: sesión establecida y publishers creados. Pestaña 2: `/madgwick/q` y `/madgwick/cpu_free` y la tasa (40 o 200 Hz). Pestaña 3: una línea «relativo b respecto a a» cada 2 s. Pestaña 4: el ángulo (sale a la tasa de los mensajes). Pestaña 5: RViz2.
 5. Para repetir el cero: Ctrl+C en la pestaña 3 y volver a lanzar su comando con la bisagra en 0°.
+
+## Con la placa PYNQ (ROS 2 nativo, sin micro-ROS)
+Las pestañas 2 a 5 son las mismas; cambia el origen de `/madgwick/q`. Requisitos y puesta en marcha en `../pynq/README.md` (IP fija en la placa, ficheros copiados, ROS 2 instalado, reglas de cortafuegos de UDP 7400-7600 y Cyclone DDS en el PC). Después, doble clic en `start_demo_pynq.bat`: la pestaña 1 pide la contraseña de SSH y la de `sudo` (`xilinx`) y arranca el nodo con las IMU quietas; las pestañas del nodo TF, el ángulo y RViz2 esperan 40-45 s a que el filtro se asiente. `start_demo_pynq.bat` no se ha ejecutado todavía: lo probado es el nodo de la placa y la recepción a 20 Hz con `ros2 topic hz`.
 
 ## Parámetros de `imu_tf.py` (`--ros-args -p nombre:=valor`)
 | Parámetro | Por defecto | Efecto |
