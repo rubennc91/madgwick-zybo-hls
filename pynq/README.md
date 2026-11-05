@@ -8,6 +8,7 @@ El Cortex-A9 ejecuta Linux (imagen PYNQ 3.0.1 de 32 bits, Ubuntu 22.04) y un nod
 | `pl_ros_node.py` | Nodo ROS 2: arranca la cadena y publica. Parámetros: `bit`, `n_imu` (2), `odr_hz` (119 o 952), `pub_hz` (10.0, por IMU), `stat_s` (5.0) |
 | `start_node.sh` | Lanza el nodo con todo el entorno (venv de PYNQ, ROS 2, Cyclone DDS). Uso: `start_node.sh [n_imu] [odr_hz] [pub_hz]` (por defecto `2 119 10.0`) |
 | `nav_diag.py` | Diagnóstico de las 4 IMU: arranca cada `nav_spi_ctrl` por separado y muestra `STATUS` y `WHO_AM_I` (solo lee) |
+| `bench/` | Scripts de medida con 4 IMU (CPU libre con bucle de fondo, mensajes/s, latencia de ida y vuelta); ver `bench/README.md` |
 | `cyclone_board.xml` | Configuración de Cyclone DDS de la placa (descubrimiento por unicast hacia el PC, 192.168.2.1) |
 
 **¿Quieres repetirlo en otro PC y otra placa?** Sigue `GUIA_REPLICAR.md`, que ordena todos los pasos (qué instalar y qué descargar). Este fichero es la referencia detallada.
@@ -28,7 +29,17 @@ La receta para compilar ROS 2 para la placa está en `../ros2_armhf/`; los binar
 
   Hasta 100 Hz por IMU el nodo publica lo pedido. Por encima satura en ≈540 mensajes/s: `top` muestra `python3` al 100 % de un núcleo, así que el límite es el hilo de Python (no la PL ni la red). `ros2 topic hz` ve las cuatro IMU de golpe en cada periodo de publicación (ráfagas de 4).
 * **Demo completa** con `../ros/start_demo_pynq.bat` (nodo de la placa por SSH, topics, nodo TF, ángulo y RViz2): ejecutada y funciona. El **ángulo de la bisagra no se ha comprobado** con esta variante (no había montaje).
-* **Sin medir**: la latencia de la muestra al mensaje y la tabla comparativa con micro-ROS.
+* **CPU libre y latencia con 4 IMU** (`bench/`; 0 incoherentes y 0 pérdida en el PC en todas las pruebas):
+
+| ODR (Hz) | msg/s | CPU libre, bucle de fondo (%) | CPU libre, `/proc/stat` (%) | recibidos en el PC (msg/s) | huecos máx. (ms) |
+|---|---|---|---|---|---|
+| 119 | 40 | 93,6 | 93,0 | 40,0 | ≈115 |
+| 119 | 200 | 77,7 | 72,6 | 200,0 | 31-38 |
+| 952 | 40 | 94,1 | 92,1 | 40,0 | ≈116 |
+| 952 | 200 | 77,2 | 72,7 | 200,0 | 31-37 |
+
+  Con el bucle de fondo (definición del paper) quedan libres ≈94 % a 40 msg/s y ≈77 % a 200 msg/s, en los dos ODR: el coste va con los mensajes/s. Latencia de ida y vuelta por el PC (4 IMU, 952 Hz, 10 y 50 Hz por IMU): mediana 4,8-5,1 ms para el primer mensaje del grupo y 17,6-17,7 ms para el cuarto (se publican uno tras otro, ≈4 ms entre sí). Leer `q` de las 4 IMU cuesta 0,56 ms.
+* **Sin medir**: el ángulo de la bisagra con esta variante y la latencia de ida con relojes sincronizados.
 
 ## Requisitos
 * Zybo Z7-10 con una imagen PYNQ 3.0.1 de 32 bits: [nick-petrovsky/PYNQ-ZYBO](https://github.com/nick-petrovsky/PYNQ-ZYBO) (hay imágenes ya compiladas para la Zybo, la Z7-10 y la Z7-20; para la Z7-10 no hace falta el paso del MAC). La placa no tiene Internet en esta configuración (cable directo al PC).

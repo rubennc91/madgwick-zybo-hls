@@ -1,0 +1,7 @@
+== ODR 952 Hz, pub_hz 50 por IMU, 4 IMU ==
+mensajes 9690 | RTT ms: media 12.16, mediana 12.89, p95 20.00, p99 26.93, max 42.55 | ida estimada (RTT/2) mediana 6.45 ms
+  imu0: n 2435, mediana 4.83 ms, p99 17.16 ms
+  imu1: n 2421, mediana 9.34 ms, p99 20.61 ms
+  imu2: n 2396, mediana 13.54 ms, p99 23.69 ms
+  imu3: n 2438, mediana 17.55 ms, p99 33.07 ms
+lectura de q de la PL (4 IMU, con conversion): media 553 us, p99 717 us, max 4847 us

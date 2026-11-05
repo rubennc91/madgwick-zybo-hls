@@ -191,7 +191,8 @@ def main():
         pass
     node.pl.stop()
     node.destroy_node()
-    rclpy.shutdown()
+    if rclpy.ok():                 # tras Ctrl-C rclpy ya cerro el contexto: evita el traceback "rcl_shutdown already called"
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

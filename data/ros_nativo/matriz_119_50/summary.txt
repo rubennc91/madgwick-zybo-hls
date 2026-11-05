@@ -1,0 +1,12 @@
+Referencia sin nodo: 2374071 it/s en 2 nucleos (deriva inicio-fin 0.0 %)
+
+| run | ODR | pub_hz | modo | CPU libre /proc/stat (%) | CPU libre bucle (%) | msg/s publicados | incoherentes | nota |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 119 | 50 | A | 72.7 | - | 200.0 | 0 |  |
+| 2 | 119 | 50 | A | 72.5 | - | 200.0 | 0 |  |
+| 3 | 119 | 50 | A | 72.7 | - | 200.0 | 0 |  |
+
+Promedios por condicion (sobre las repeticiones):
+| ODR | pub_hz | CPU libre /proc/stat (%) | CPU libre bucle (%) | msg/s publicados | incoherentes (suma) |
+|---|---|---|---|---|---|
+| 119 | 50 | 72.6 | - | 200.0 | 0 |

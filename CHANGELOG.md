@@ -29,7 +29,22 @@
 * A 100 Hz los dos primeros informes dan ≈83-86 % de CPU libre y luego ≈55 %; probablemente por el suscriptor del PC, que aún no estaba conectado (no comprobado).
 * `ros2 topic hz` muestra las cuatro IMU de golpe cada periodo de publicación (ráfagas de 4); el mínimo de 0,000 s y el máximo de ≈0,1 s a 10 Hz no son jitter.
 
-**Sin medir**: el ángulo de la bisagra con esta variante (no había montaje), la latencia de la muestra al mensaje y la tabla comparativa con micro-ROS.
+**Probado: CPU libre y latencia con 4 IMU** (`pynq/bench/`; 2 repeticiones de 80 s por condición, 0 lecturas incoherentes y 0 pérdida en el PC):
+
+| ODR (Hz) | msg/s | CPU libre, bucle de fondo (%) | CPU libre, `/proc/stat` (%) | recibidos en el PC (msg/s) | huecos máx. (ms) |
+|---|---|---|---|---|---|
+| 119 | 40 | 93,6 | 93,0 | 40,0 | ≈115 |
+| 119 | 200 | 77,7 | 72,6 | 200,0 | 31-38 |
+| 952 | 40 | 94,1 | 92,1 | 40,0 | ≈116 |
+| 952 | 200 | 77,2 | 72,7 | 200,0 | 31-37 |
+
+* «Bucle de fondo» es la definición del paper (VII-H): velocidad de un bucle de baja prioridad por núcleo con el nodo en marcha, relativa a la misma sin el nodo (deriva de la referencia ≤ 1,8 %). Linux usa dos núcleos: 200 msg/s ≈ 0,46 núcleos y 40 msg/s ≈ 0,12. Con micro-ROS (v0.7.0) quedaba libre el 99,9 % y el 99,6 % de un núcleo, no comparable de forma directa (otro sistema y otro contador).
+* El coste va con los mensajes/s, no con el ODR (≈77 % libre con 200 msg/s a 119 y a 952 Hz).
+* Una ejecución de `119/50` dio 93,9 % por `/proc/stat` frente a ≈72,6 % en otras cuatro; se descartó (causa no identificada).
+* Latencia de ida y vuelta con 4 IMU a 952 Hz (el nodo pone la marca con su reloj y compara a la llegada del eco del PC; mediana, a 10 y 50 Hz por IMU): 4,8-5,1 ms para el primer mensaje del grupo de cuatro y 17,6-17,7 ms para el cuarto (p99 10-17 y 31-33 ms; máximo 43 ms). Los cuatro mensajes se publican uno tras otro, ≈4 ms entre sí, y la marca se toma antes de leer. Ida ≤ RTT/2 ≈ 2,4-2,6 ms para el primero (camino supuesto simétrico, incluye el eco del PC). Leer `q` de las 4 IMU por AXI-Lite: 0,56 ms de media (0,14 ms por IMU).
+* A 100 Hz por IMU no se da latencia: el proceso de medida de la placa (otro nodo de Python) solo recibió la mitad de los mensajes devueltos.
+
+**Sin medir**: el ángulo de la bisagra con esta variante (no había montaje) y la latencia de ida con relojes sincronizados.
 
 **Observaciones**:
 * PYNQ solo encuentra la PL si el nodo se lanza con `sudo -i` (sesión de login de root); con `sudo` a secas falla con `RuntimeError: No Devices Found`.

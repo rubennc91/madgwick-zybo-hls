@@ -1,0 +1,33 @@
+[INFO] [1786658762.181712576] [pl_madgwick]: Arrancando la cadena en la PL (placas quietas ~8 s)...
+[INFO] [1786658766.554879777] [pl_madgwick]: IMU0: periodo 1059.585 us (943.8 Hz)
+[INFO] [1786658766.561910403] [pl_madgwick]: IMU1: periodo 1026.539 us (974.1 Hz)
+[INFO] [1786658766.569544935] [pl_madgwick]: IMU2: periodo 1038.357 us (963.1 Hz)
+[INFO] [1786658766.577147037] [pl_madgwick]: IMU3: periodo 1007.080 us (993.0 Hz)
+[INFO] [1786658768.600767393] [pl_madgwick]: IMU0: sesgo giro [188, 125, -29]
+[INFO] [1786658770.561134063] [pl_madgwick]: IMU1: sesgo giro [-9, 19, 89]
+[INFO] [1786658772.544223032] [pl_madgwick]: IMU2: sesgo giro [161, 72, 43]
+[INFO] [1786658774.511799710] [pl_madgwick]: IMU3: sesgo giro [-136, -65, 90]
+[INFO] [1786658777.546759154] [pl_madgwick]: Publicando /madgwick/q y /madgwick/cpu_free
+[INFO] [1786658782.556012786] [pl_madgwick]: CPU libre 0.4 % | publicados 1972, incoherentes 0
+[INFO] [1786658787.555345952] [pl_madgwick]: CPU libre 1.4 % | publicados 3932, incoherentes 0
+[INFO] [1786658792.556459449] [pl_madgwick]: CPU libre 0.0 % | publicados 5860, incoherentes 0
+[INFO] [1786658797.557162871] [pl_madgwick]: CPU libre 0.2 % | publicados 7820, incoherentes 0
+[INFO] [1786658802.557109711] [pl_madgwick]: CPU libre 0.0 % | publicados 9756, incoherentes 0
+[INFO] [1786658807.555509660] [pl_madgwick]: CPU libre 0.3 % | publicados 11716, incoherentes 0
+[INFO] [1786658812.555569732] [pl_madgwick]: CPU libre 0.3 % | publicados 13700, incoherentes 0
+[INFO] [1786658817.555070736] [pl_madgwick]: CPU libre 0.2 % | publicados 15672, incoherentes 0
+[INFO] [1786658822.557259025] [pl_madgwick]: CPU libre 0.3 % | publicados 17628, incoherentes 0
+[INFO] [1786658827.554679151] [pl_madgwick]: CPU libre 0.3 % | publicados 19592, incoherentes 0
+[INFO] [1786658832.556343353] [pl_madgwick]: CPU libre 0.0 % | publicados 21540, incoherentes 0
+Traceback (most recent call last):
+  File "/home/xilinx/pl_ros_node.py", line 198, in <module>
+    main()
+  File "/home/xilinx/pl_ros_node.py", line 194, in main
+    rclpy.shutdown()
+  File "/opt/ros2_min/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+    _shutdown(context=context)
+  File "/opt/ros2_min/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+    return context.shutdown()
+  File "/opt/ros2_min/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+    self.__context.shutdown()
+rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at /ws/src/ros2/rcl/rcl/src/rcl/init.c:241
